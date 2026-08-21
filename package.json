@@ -1,0 +1,20 @@
+{
+  "name": "fixy-agent",
+  "version": "0.1.0",
+  "description": "Local Ollama-powered CLI coding agent — reads errors, edits files, runs commands, and iterates until the bug is fixed.",
+  "type": "module",
+  "bin": {
+    "fixy": "./bin/fixy.js"
+  },
+  "main": "./bin/fixy.js",
+  "scripts": {
+    "start": "node ./bin/fixy.js"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
