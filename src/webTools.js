@@ -1092,17 +1092,37 @@ export async function dbClient({
   if (action === "inspect_schema" || action === "execute_query" || action === "list_tables") {
     if (db_type === "sqlite") {
       const dbFile = connection_or_file || "database.sqlite";
+
+      // Pre-check: is the sqlite3 CLI binary available? If not, surface a clear install hint.
+      let sqliteAvailable = true;
+      try {
+        await execAsync("which sqlite3");
+      } catch {
+        sqliteAvailable = false;
+      }
+
+      if (!sqliteAvailable) {
+        const installHint =
+          process.platform === "android" || process.platform === "linux"
+            ? "On Termux/Ubuntu/Debian: `apt install sqlite` | On macOS: `brew install sqlite` | On Alpine: `apk add sqlite`"
+            : "Install the sqlite3 CLI for your OS.";
+        return `ERROR: The 'sqlite3' CLI binary was not found in PATH.\n${installHint}\n\nAlternative: use action='analyze_query' for static SQL analysis without a live DB, or action='validate_schema' for schema review.\nFor live queries without the CLI, install: npm i better-sqlite3 and add a JS fallback (not bundled to keep deps light).`;
+      }
+
       try {
         if (action === "inspect_schema" || action === "list_tables") {
           const { stdout } = await execAsync(`sqlite3 ${JSON.stringify(dbFile)} ".schema"`);
           return truncate(`[SQLite Schema: ${dbFile}]\n` + (stdout || "(Empty database or no tables found)"));
         } else if (action === "execute_query") {
+          if (!query) return "ERROR: 'query' parameter is required for execute_query action.";
           const { stdout, stderr } = await execAsync(`sqlite3 -header -column ${JSON.stringify(dbFile)} ${JSON.stringify(query)}`);
           return truncate(`[Query Result on ${dbFile}]\n` + (stdout || "(Query executed successfully with 0 returned rows)") + (stderr ? `\n[stderr]: ${stderr}` : ""));
         }
       } catch (err) {
-        return `ERROR SQLite execution failed: ${err.message}\nEnsure 'sqlite3' CLI is installed or use 'analyze_query' / 'validate_schema'.`;
+        return `ERROR SQLite execution failed: ${err.message}\nTip: ensure the database file exists and the SQL syntax is valid for SQLite.\nYou can also use 'analyze_query' / 'validate_schema' which work without a live DB.`;
       }
+    } else if (db_type === "postgres" || db_type === "mysql" || db_type === "mongodb") {
+      return `ERROR: Live query execution for ${db_type} requires a connection string and a native driver (not bundled).\nFor ${db_type}, use action='analyze_query' (SQL dialects only) or install a native driver: ${db_type === "postgres" ? "pg" : db_type === "mysql" ? "mysql2" : "mongodb"}.`;
     }
   }
 
@@ -1625,7 +1645,56 @@ export async function portScanner({
     });
   }
 
-  return `ERROR: Invalid action "${action}". Allowed: scan_ports, check_health, check_ssl`;
+  // Health check: HTTP/HTTPS HEAD/GET ping with timing, status, response code
+  if (action === "check_health") {
+    if (!url) {
+      return `ERROR: 'url' parameter is required for check_health action. Example: check_health(url=\"https://example.com\")`;
+    }
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (e) {
+      return `ERROR: Invalid URL \"${url}\": ${e.message}`;
+    }
+
+    const startTime = performance.now();
+    const controller = new AbortController();
+    // Use a generous default for HTTP (10s) — falls back to user's timeout_ms if larger
+    const effectiveTimeout = Math.max(timeout_ms, 10000);
+    const tid = setTimeout(() => controller.abort(), effectiveTimeout);
+
+    try {
+      // Try HEAD first, fall back to GET if HEAD not allowed
+      let res;
+      try {
+        res = await fetch(url, { method: "HEAD", signal: controller.signal, redirect: "follow" });
+      } catch (headErr) {
+        // Retry with GET on connection-level failure (some servers reject HEAD)
+        res = await fetch(url, { method: "GET", signal: controller.signal, redirect: "follow" });
+      }
+      clearTimeout(tid);
+      const latency = Math.round(performance.now() - startTime);
+      const statusClass = res.status >= 200 && res.status < 400 ? "[✔ HEALTHY]" : "[✖ UNHEALTHY]";
+      const contentType = res.headers.get("content-type") || "N/A";
+      const server = res.headers.get("server") || "N/A";
+
+      return [
+        `=== Health Check: ${url} ===`,
+        `Status: ${statusClass} (HTTP ${res.status} ${res.statusText || ""})`,
+        `Response Time: ${latency}ms`,
+        `Content-Type: ${contentType}`,
+        `Server: ${server}`,
+        `Final URL: ${res.url}`,
+        `Redirected: ${res.redirected ? "yes" : "no"}`,
+      ].join("\n");
+    } catch (err) {
+      clearTimeout(tid);
+      const latency = Math.round(performance.now() - startTime);
+      return `=== Health Check: ${url} ===\nStatus: [✖ UNREACHABLE]\nError: ${err.name === "AbortError" ? `Timeout after ${effectiveTimeout}ms` : err.message}\nAttempted: ${latency}ms`;
+    }
+  }
+
+  return `ERROR: Invalid action "${action}". Allowed: scan_ports, check_health, check_ssl. For check_health or check_ssl, a 'url' parameter is required.`;
 }
 
 // ---------------------------------------------------------------------------
