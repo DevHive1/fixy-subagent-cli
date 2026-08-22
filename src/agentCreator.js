@@ -35,7 +35,7 @@ export async function launchAgentCreator(reader) {
   console.log(colors.accent.bold("\n5. Select Allowed Tools:"));
   const allToolNames = TOOL_DEFS.map((t) => t.function.name);
   allToolNames.forEach((tName, i) => {
-    console.log(`   ${colors.cyan(i + 1)}. ${tName}`);
+    console.log(`   ${colors.accent(i + 1)}. ${tName}`);
   });
   console.log(`   ${colors.dim("0. ALL TOOLS (Full Access)")}`);
 
