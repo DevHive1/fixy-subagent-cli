@@ -21,6 +21,17 @@ import {
   portScanner,
   projectAuditor,
 } from "./webTools.js";
+import {
+  webSearch,
+  webScrape,
+  webCrawl,
+  webScreenshot,
+  webExtractLinks,
+  webExtractMetadata,
+  webDownload,
+  webRss,
+  webSitemap,
+} from "./internetTools.js";
 
 const execAsync = promisify(exec);
 const MAX_OUTPUT = 15000;
@@ -209,6 +220,181 @@ export const TOOL_DEFS = [
           headers: { type: "object", description: "Optional HTTP headers." },
           body: { type: "string", description: "Optional request body." },
           max_length: { type: "integer", description: "Max response characters to return (default 8000)." },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  // 10b. web_search (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Multi-engine web search: DuckDuckGo HTML, Wikipedia REST, GitHub API, npm registry. No API key required.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query string." },
+          engine: { type: "string", enum: ["duckduckgo", "wikipedia", "github", "npm", "auto"], description: "Search engine (default duckduckgo)." },
+          max_results: { type: "integer", description: "Max number of results (default 8)." },
+          safe_search: { type: "string", enum: ["on", "moderate", "off"], description: "Safe-search level (DuckDuckGo only)." },
+          region: { type: "string", description: "Region code, e.g. 'us-en', 'uk-en', 'de-de' (default 'us-en')." },
+          timeout_ms: { type: "integer", description: "Request timeout in ms (default 15000)." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  // 10c. web_scrape (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_scrape",
+      description: "Advanced HTML scraping with CSS-selector based extraction. Supports single selector or a map of field→selector for structured JSON output. Can extract text or a specific attribute (e.g. href, src).",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL of the page to scrape." },
+          selector: { type: "string", description: "A single CSS selector to extract matching elements." },
+          selectors: { type: "object", description: "Map of {fieldName: cssSelector} for structured extraction (returns JSON object)." },
+          attr: { type: "string", description: "If set, extract this attribute (e.g. 'href', 'src') instead of inner text." },
+          max_items: { type: "integer", description: "Max number of items per selector (default 50)." },
+          base_url: { type: "string", description: "Override base URL for resolving relative links." },
+          include_html: { type: "boolean", description: "Include the raw inner HTML of each match." },
+          timeout_ms: { type: "integer", description: "Request timeout in ms (default 20000)." },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  // 10d. web_crawl (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_crawl",
+      description: "Multi-page recursive web crawler with depth limit, same-domain filter, URL include/exclude regex, and optional polite delay.",
+      parameters: {
+        type: "object",
+        properties: {
+          start_url: { type: "string", description: "URL to begin crawling from." },
+          max_pages: { type: "integer", description: "Maximum number of pages to visit (default 10)." },
+          max_depth: { type: "integer", description: "Maximum link-follow depth from start (default 2)." },
+          same_domain: { type: "boolean", description: "Restrict to same domain as start_url (default true)." },
+          url_pattern: { type: "string", description: "Regex string — only crawl URLs that match." },
+          exclude_pattern: { type: "string", description: "Regex string — skip URLs that match." },
+          delay_ms: { type: "integer", description: "Delay between requests in ms (default 0)." },
+          timeout_ms: { type: "integer", description: "Per-request timeout in ms (default 15000)." },
+          max_bytes_per_page: { type: "integer", description: "Max response size per page in bytes (default 2 MB)." },
+        },
+        required: ["start_url"],
+      },
+    },
+  },
+  // 10e. web_screenshot (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_screenshot",
+      description: "Headless render descriptor for a URL: extracts title, description, language, viewport, DOM tag histogram, asset inventory (images/scripts/stylesheets), and performance hints. (No actual pixel render — see output note.)",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL to analyze." },
+          include_structure: { type: "boolean", description: "Include DOM tag histogram (default true)." },
+          include_assets: { type: "boolean", description: "Include asset inventory (default true)." },
+          include_performance_hints: { type: "boolean", description: "Include performance hints (default true)." },
+          timeout_ms: { type: "integer", description: "Request timeout in ms (default 20000)." },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  // 10f. web_extract_links (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_extract_links",
+      description: "Extract all unique hyperlinks from a page with text, rel, type, target, and internal/external classification. Supports regex filtering and external link exclusion.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL of the page to extract links from." },
+          filter_pattern: { type: "string", description: "Regex string — only include links whose href or text matches." },
+          include_external: { type: "boolean", description: "Include links to other domains (default true)." },
+          max_links: { type: "integer", description: "Maximum number of links to return (default 200)." },
+          timeout_ms: { type: "integer", description: "Request timeout in ms (default 20000)." },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  // 10g. web_extract_metadata (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_extract_metadata",
+      description: "Extract SEO meta tags, OpenGraph, Twitter Card, JSON-LD structured data, and link relations (canonical, alternate, prev/next, icon).",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL of the page to analyze." },
+          timeout_ms: { type: "integer", description: "Request timeout in ms (default 20000)." },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  // 10h. web_download (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_download",
+      description: "Download a remote file (PDF, image, archive, etc.) to local disk with streaming, size limit, and overwrite control.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL of the file to download." },
+          output_path: { type: "string", description: "Destination file path. Defaults to current dir + filename from URL." },
+          max_bytes: { type: "integer", description: "Maximum allowed size in bytes (default 100 MB)." },
+          timeout_ms: { type: "integer", description: "Request timeout in ms (default 60000)." },
+          overwrite: { type: "boolean", description: "Overwrite existing file (default false)." },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  // 10i. web_rss (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_rss",
+      description: "Parse an RSS 2.0 or Atom 1.0 feed: title, subtitle, items/entries with link, author, pubDate, GUID, categories, and optional full content.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL of the RSS/Atom feed." },
+          max_items: { type: "integer", description: "Max items/entries to return (default 20)." },
+          include_content: { type: "boolean", description: "Include summary/content text (default false)." },
+          timeout_ms: { type: "integer", description: "Request timeout in ms (default 20000)." },
+        },
+        required: ["url"],
+      },
+    },
+  },
+  // 10j. web_sitemap (NEW)
+  {
+    type: "function",
+    function: {
+      name: "web_sitemap",
+      description: "Parse an XML sitemap (urlset or sitemap index). For sitemap indexes, optionally follow and enumerate URLs from sub-sitemaps.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL of the sitemap.xml." },
+          max_urls: { type: "integer", description: "Max URLs to enumerate (default 100)." },
+          follow_sitemap_index: { type: "boolean", description: "For sitemap indexes, fetch and enumerate sub-sitemaps (default true)." },
+          max_submaps: { type: "integer", description: "Max sub-sitemaps to follow (default 5)." },
+          timeout_ms: { type: "integer", description: "Request timeout in ms (default 20000)." },
         },
         required: ["url"],
       },
@@ -1509,6 +1695,15 @@ const HANDLERS = {
   batch_edit: batchEdit,
   git_action: gitAction,
   web_fetch: webFetch,
+  web_search: webSearch,
+  web_scrape: webScrape,
+  web_crawl: webCrawl,
+  web_screenshot: webScreenshot,
+  web_extract_links: webExtractLinks,
+  web_extract_metadata: webExtractMetadata,
+  web_download: webDownload,
+  web_rss: webRss,
+  web_sitemap: webSitemap,
   manage_background_tasks: manageBackgroundTasks,
   invoke_subagent: invokeSubagent,
   invoke_parallel_subagents: invokeParallelSubagents,

@@ -1,6 +1,6 @@
 # Fixy (Edition 2.0) — Autonomous Terminal Engineering Agent
 
-A local, on-device AI engineering assistant featuring a **cyber terminal interface**, **professional visual cards**, a specialized **Parallel Multi-Agent Subsystem** with an autonomous & interactive **Agent Creator**, a non-blocking **Background Task Engine**, configurable **Max Tool Rounds Limits**, and a comprehensive suite of **33 precision tools** and **12 specialized sub-agents**.
+A local, on-device AI engineering assistant featuring a **cyber terminal interface**, **professional visual cards**, a specialized **Parallel Multi-Agent Subsystem** with an autonomous & interactive **Agent Creator**, a non-blocking **Background Task Engine**, configurable **Max Tool Rounds Limits**, and a comprehensive suite of **42 precision tools** and **12 specialized sub-agents**.
 
 ---
 
@@ -22,56 +22,67 @@ A local, on-device AI engineering assistant featuring a **cyber terminal interfa
 
 ---
 
-## Complete Suite of 33 Professional Tools
+## Complete Suite of 42 Professional Tools
 
 ### 🌐 Frontend & Web Construction
 1. `web_scaffold` — Scaffold full-stack web projects (`modern_html`, `react_tailwind`, `vue`, `svelte`, `nextjs`, `express_api`, `fastapi`), accessible UI components (Navbar, Modal, Hero, Form, DataTable, CardGrid), and complete pages.
 2. `frontend_inspector` — Static audit for WCAG Accessibility (a11y), SEO meta tags, OpenGraph, mobile responsiveness, and asset performance.
 3. `web_fetch` — HTTP client for API queries and clean web documentation retrieval.
 
+### 🔍 Advanced Internet & Browsing (zero-dependency, Node 22 built-ins)
+4. `web_search` — Multi-engine web search: DuckDuckGo HTML, Wikipedia REST, GitHub API, npm registry. No API key required.
+5. `web_scrape` — CSS-selector based HTML scraping with structured JSON extraction (field→selector map) and per-attribute extraction (e.g. `href`, `src`).
+6. `web_crawl` — Multi-page recursive crawler with depth limit, same-domain filter, URL include/exclude regex, and optional polite delay.
+7. `web_screenshot` — Headless render descriptor: title, language, viewport, DOM tag histogram, asset inventory, and performance hints.
+8. `web_extract_links` — All hyperlinks with text, `rel`, `type`, `target`, internal/external classification, and regex filtering.
+9. `web_extract_metadata` — SEO meta, OpenGraph, Twitter Card, JSON-LD structured data, link relations, microdata/RDFa detection.
+10. `web_download` — Stream remote files (PDF, images, archives) to disk with size limit and overwrite control.
+11. `web_rss` — Parse RSS 2.0 / Atom 1.0 feeds: title, entries, links, authors, pubDate, GUID, categories, optional content.
+12. `web_sitemap` — Parse XML sitemaps (urlset or sitemap index) with optional sub-sitemap enumeration.
+
 ### ⚙ Backend & API Architecture
-4. `api_tester` — Send precision HTTP/REST/GraphQL requests with microsecond latency timing, Bearer/Basic auth, JSON schema validation, and status assertions.
-5. `route_inspector` — Introspect backend routes (Express, Fastify, Next.js, FastAPI, Flask), middleware stacks, CORS policies, and security vulnerabilities.
+13. `api_tester` — Send precision HTTP/REST/GraphQL requests with microsecond latency timing, Bearer/Basic auth, JSON schema validation, and status assertions.
+14. `route_inspector` — Introspect backend routes (Express, Fastify, Next.js, FastAPI, Flask), middleware stacks, CORS policies, and security vulnerabilities.
 
 ### 🗄 Database & ORM Modeling
-6. `db_client` — Universal DB tool: schema table inspection, SQLite query execution, SQL anti-pattern analysis, and relational schema normalization validation.
-7. `schema_migrator` — Generate reversible UP/DOWN SQL migrations, TypeScript domain interfaces, Prisma models, or Drizzle schemas.
+15. `db_client` — Universal DB tool: schema table inspection, SQLite query execution, SQL anti-pattern analysis, and relational schema normalization validation.
+16. `schema_migrator` — Generate reversible UP/DOWN SQL migrations, TypeScript domain interfaces, Prisma models, or Drizzle schemas.
 
 ### 🧪 Automated Testing & Benchmarks
-8. `test_runner` — Execute unit/integration/E2E test suites (Vitest, Jest, Pytest, Playwright, Node test runner) and extract failure assertion diffs.
-9. `load_tester` — High-concurrency HTTP benchmark stress tester measuring throughput (RPS), p50/p95/p99 latency percentiles, and error rates.
+17. `test_runner` — Execute unit/integration/E2E test suites (Vitest, Jest, Pytest, Playwright, Node test runner) and extract failure assertion diffs.
+18. `load_tester` — High-concurrency HTTP benchmark stress tester measuring throughput (RPS), p50/p95/p99 latency percentiles, and error rates.
 
 ### 🚀 Hosting, Cloud & DevOps
-10. `hosting_deployer` — Generate hardened multi-stage Dockerfiles, `docker-compose.yml`, Nginx reverse proxy configs with SSL/HTTP2, and GitHub Actions CI/CD workflows.
-11. `port_scanner` — Inspect network ports, discover active services (Node, Vite, Postgres, Redis, Mongo, FastAPI), check HTTP health, and verify SSL certificate expiration.
-12. `project_auditor` — Full-stack quality and highest-standards architecture auditor producing a scored diagnostic scorecard across 6 architectural pillars.
+19. `hosting_deployer` — Generate hardened multi-stage Dockerfiles, `docker-compose.yml`, Nginx reverse proxy configs with SSL/HTTP2, and GitHub Actions CI/CD workflows.
+20. `port_scanner` — Inspect network ports, discover active services (Node, Vite, Postgres, Redis, Mongo, FastAPI), check HTTP health, and verify SSL certificate expiration.
+21. `project_auditor` — Full-stack quality and highest-standards architecture auditor producing a scored diagnostic scorecard across 6 architectural pillars.
 
 ### 📝 Precision File & Code Intelligence
-13. `read_file` — Read text with optional line numbers and ranges.
-14. `read_lines` — Read specific line numbers, ranges, or line selections from one or more files simultaneously.
-15. `write_file` — Create or overwrite files.
-16. `edit_file` — Surgical exact replacement with unique match verification.
-17. `batch_edit` — Multi-file search and replace with dry-run safety.
-18. `list_dir` — Directory tree inspection with recursive depth and sizes.
-19. `search_code` — High-speed ripgrep/regex code search across files.
-20. `find_files` — Advanced search by glob pattern, file extension, and type.
-21. `code_structure` — Extract code outlines (functions, classes, exports, imports).
-22. `file_info` — Detailed metadata (size, lines, permissions, SHA-256 hash).
+22. `read_file` — Read text with optional line numbers and ranges.
+23. `read_lines` — Read specific line numbers, ranges, or line selections from one or more files simultaneously.
+24. `write_file` — Create or overwrite files.
+25. `edit_file` — Surgical exact replacement with unique match verification.
+26. `batch_edit` — Multi-file search and replace with dry-run safety.
+27. `list_dir` — Directory tree inspection with recursive depth and sizes.
+28. `search_code` — High-speed ripgrep/regex code search across files.
+29. `find_files` — Advanced search by glob pattern, file extension, and type.
+30. `code_structure` — Extract code outlines (functions, classes, exports, imports).
+31. `file_info` — Detailed metadata (size, lines, permissions, SHA-256 hash).
 
 ### 🤖 Multi-Agent & Execution Engine
-23. `invoke_subagent` — Delegate sub-tasks to a specialized subagent (foreground or background, with `max_rounds`).
-24. `invoke_parallel_subagents` — Spawn multiple subagents simultaneously in parallel (with `max_rounds`).
-25. `manage_subagents` — List, inspect status, read logs, or cancel background subagents.
-26. `define_agent` — Programmatically create and register new custom agents (with `max_rounds`).
-27. `set_rounds_limit` — Dynamically adjust execution budget and max rounds limit.
-28. `manage_memory` — Session scratchpad store for multi-turn planning.
+32. `invoke_subagent` — Delegate sub-tasks to a specialized subagent (foreground or background, with `max_rounds`).
+33. `invoke_parallel_subagents` — Spawn multiple subagents simultaneously in parallel (with `max_rounds`).
+34. `manage_subagents` — List, inspect status, read logs, or cancel background subagents.
+35. `define_agent` — Programmatically create and register new custom agents (with `max_rounds`).
+36. `set_rounds_limit` — Dynamically adjust execution budget and max rounds limit.
+37. `manage_memory` — Session scratchpad store for multi-turn planning.
 
 ### ⚡ System & Environment
-29. `run_command` — Execute shell commands in foreground or background.
-30. `manage_background_tasks` — List, inspect logs, send stdin, or terminate background shell processes.
-31. `git_action` — Git operations (`status`, `diff`, `log`, `commit`, `branch`, `stash`, `blame`).
-32. `env_manager` — Safe inspection and parsing of environment variables and `.env` files.
-33. `system_diagnostics` — Host CPU, memory, uptime, and OS statistics.
+38. `run_command` — Execute shell commands in foreground or background.
+39. `manage_background_tasks` — List, inspect logs, send stdin, or terminate background shell processes.
+40. `git_action` — Git operations (`status`, `diff`, `log`, `commit`, `branch`, `stash`, `blame`).
+41. `env_manager` — Safe inspection and parsing of environment variables and `.env` files.
+42. `system_diagnostics` — Host CPU, memory, uptime, and OS statistics.
 
 ---
 
