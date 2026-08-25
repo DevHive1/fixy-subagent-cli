@@ -4,10 +4,11 @@ import http from "node:http";
 import https from "node:https";
 import net from "node:net";
 import tls from "node:tls";
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 15000;
 
 function truncate(str) {
@@ -1096,7 +1097,7 @@ export async function dbClient({
       // Pre-check: is the sqlite3 CLI binary available? If not, surface a clear install hint.
       let sqliteAvailable = true;
       try {
-        await execAsync("which sqlite3");
+        await execFileAsync("which", ["sqlite3"]);
       } catch {
         sqliteAvailable = false;
       }
@@ -1111,11 +1112,15 @@ export async function dbClient({
 
       try {
         if (action === "inspect_schema" || action === "list_tables") {
-          const { stdout } = await execAsync(`sqlite3 ${JSON.stringify(dbFile)} ".schema"`);
+          const { stdout } = await execFileAsync("sqlite3", [dbFile, ".schema"], { timeout: 30000, maxBuffer: 5 * 1024 * 1024 });
           return truncate(`[SQLite Schema: ${dbFile}]\n` + (stdout || "(Empty database or no tables found)"));
         } else if (action === "execute_query") {
           if (!query) return "ERROR: 'query' parameter is required for execute_query action.";
-          const { stdout, stderr } = await execAsync(`sqlite3 -header -column ${JSON.stringify(dbFile)} ${JSON.stringify(query)}`);
+          const { stdout, stderr } = await execFileAsync(
+            "sqlite3",
+            ["-header", "-column", dbFile, String(query)],
+            { timeout: 30000, maxBuffer: 5 * 1024 * 1024 }
+          );
           return truncate(`[Query Result on ${dbFile}]\n` + (stdout || "(Query executed successfully with 0 returned rows)") + (stderr ? `\n[stderr]: ${stderr}` : ""));
         }
       } catch (err) {
@@ -1239,32 +1244,54 @@ export async function testRunner({
   coverage = false,
   cwd = ".",
 }) {
-  let cmd = "";
+  // Build an argv array — never interpolate into a shell string.
+  let runner;
+  let args;
 
-  if (framework === "vitest" || (framework === "auto" && (await fs.stat(path.join(cwd, "vite.config.js")).catch(() => false)))) {
-    cmd = `npx vitest run ${test_path || ""} ${filter_pattern ? `-t ${JSON.stringify(filter_pattern)}` : ""} ${coverage ? "--coverage" : ""}`;
+  const useVitest = framework === "vitest" ||
+    (framework === "auto" && (await fs.stat(path.join(cwd, "vite.config.js")).catch(() => false)));
+
+  if (useVitest) {
+    runner = "npx";
+    args = ["vitest", "run"];
+    if (test_path) args.push(test_path);
+    if (filter_pattern) args.push("-t", String(filter_pattern));
+    if (coverage) args.push("--coverage");
   } else if (framework === "jest") {
-    cmd = `npx jest ${test_path || ""} ${filter_pattern ? `-t ${JSON.stringify(filter_pattern)}` : ""} ${coverage ? "--coverage" : ""}`;
+    runner = "npx";
+    args = ["jest"];
+    if (test_path) args.push(test_path);
+    if (filter_pattern) args.push("-t", String(filter_pattern));
+    if (coverage) args.push("--coverage");
   } else if (framework === "pytest") {
-    cmd = `pytest ${test_path || ""} ${filter_pattern ? `-k ${JSON.stringify(filter_pattern)}` : ""}`;
+    runner = "pytest";
+    args = [];
+    if (test_path) args.push(test_path);
+    if (filter_pattern) args.push("-k", String(filter_pattern));
   } else if (framework === "playwright") {
-    cmd = `npx playwright test ${test_path || ""}`;
+    runner = "npx";
+    args = ["playwright", "test"];
+    if (test_path) args.push(test_path);
   } else {
     // Standard Node test runner
-    cmd = `node --test ${test_path || ""}`;
+    runner = process.execPath;
+    args = ["--test"];
+    if (test_path) args.push(test_path);
   }
 
+  const cmdDisplay = [runner === process.execPath ? "node" : runner, ...args].join(" ");
   const startTime = performance.now();
   try {
-    const { stdout, stderr } = await execAsync(cmd, {
+    const { stdout, stderr } = await execFileAsync(runner, args, {
       cwd: path.resolve(cwd),
       timeout: 60000,
+      maxBuffer: 10 * 1024 * 1024,
     });
     const duration = Math.round(performance.now() - startTime);
-    return truncate(`=== Test Suite Run [PASS] (${duration}ms) ===\n$ ${cmd}\n\n${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`);
+    return truncate(`=== Test Suite Run [PASS] (${duration}ms) ===\n$ ${cmdDisplay}\n\n${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`);
   } catch (err) {
     const duration = Math.round(performance.now() - startTime);
-    return truncate(`=== Test Suite Run [FAIL] (${duration}ms) ===\n$ ${cmd}\n\n${err.stdout || ""}\n[Error Output]:\n${err.stderr || err.message}`);
+    return truncate(`=== Test Suite Run [FAIL] (${duration}ms) ===\n$ ${cmdDisplay}\n\n${err.stdout || ""}\n[Error Output]:\n${err.stderr || err.message}`);
   }
 }
 
@@ -1288,6 +1315,7 @@ export async function loadTester({
   const latencies = [];
   const statusCodes = {};
   let errors = 0;
+  let success2xx = 0;
 
   const startTime = performance.now();
   let completed = 0;
@@ -1309,6 +1337,7 @@ export async function loadTester({
         const reqLatency = performance.now() - reqStart;
         latencies.push(reqLatency);
         statusCodes[res.status] = (statusCodes[res.status] || 0) + 1;
+        if (res.status >= 200 && res.status < 300) success2xx++;
       } catch (err) {
         errors++;
       }
@@ -1337,7 +1366,7 @@ export async function loadTester({
     `=== Load Benchmark Report: ${method.toUpperCase()} ${url} ===`,
     `Concurrency: ${poolSize} clients | Total Requests: ${totalReqs} | Duration: ${totalTimeSec.toFixed(2)}s`,
     `Throughput: ${rps} requests/sec`,
-    `Success Rate: ${(((totalReqs - errors) / totalReqs) * 100).toFixed(1)}% (${errors} failed)`,
+    `Success Rate: ${((success2xx / totalReqs) * 100).toFixed(1)}% 2xx (${success2xx}/${totalReqs}) | Failed requests: ${errors} | Non-2xx responses: ${totalReqs - success2xx - errors}`,
     `Status Codes: ${statusSummary || "none"}`,
     "",
     `Latency Distribution:`,
@@ -1362,6 +1391,36 @@ export async function hostingDeployer({
   options = {},
   output_file,
 }) {
+  if (action === "audit") {
+    const root = path.resolve(options.path || ".");
+    const checks = [];
+    const artifacts = [
+      ["Dockerfile", "Container image definition"],
+      ["docker-compose.yml", "Multi-service orchestration"],
+      [".github/workflows", "CI/CD pipelines"],
+      ["nginx.conf", "Reverse proxy configuration"],
+      [".dockerignore", "Docker build context hygiene"],
+    ];
+    for (const [file, label] of artifacts) {
+      const exists = await fs.stat(path.join(root, file)).catch(() => false);
+      checks.push(`  ${exists ? "✔ PASS" : "⚠ MISSING"} — ${label} (${file})`);
+    }
+    // Basic Dockerfile hygiene
+    const dockerfile = await fs.readFile(path.join(root, "Dockerfile"), "utf8").catch(() => "");
+    if (dockerfile) {
+      if (!/USER\s+\S+/i.test(dockerfile)) checks.push("  ⚠ WARN — Dockerfile runs as root (add a non-privileged USER).");
+      else checks.push("  ✔ PASS — Dockerfile defines a non-root USER.");
+      if (!/HEALTHCHECK/i.test(dockerfile)) checks.push("  ⚠ WARN — No HEALTHCHECK instruction found.");
+      else checks.push("  ✔ PASS — HEALTHCHECK present.");
+      if (!/--chown/i.test(dockerfile)) checks.push("  ⚠ INFO — Consider --chown on COPY for non-root ownership.");
+    }
+    return [
+      `=== Deployment Configuration Audit: ${root} ===`,
+      `Findings: ${checks.filter((c) => c.includes("⚠")).length} warnings`,
+      ...checks,
+    ].join("\n");
+  }
+
   let content = "";
   let defaultFilename = "Dockerfile";
 
@@ -1399,7 +1458,76 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \\
 
 CMD ["node", "dist/server.js"]
 `;
-      defaultFilename = "Dockerfile";
+    } else if (project_type === "react") {
+      content = `# Multi-stage React SPA: build with Node, serve via Nginx
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM nginx:1.27-alpine AS runner
+COPY --from=builder /app/dist /usr/share/nginx/html
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1/ || exit 1
+CMD ["nginx", "-g", "daemon off;"]
+`;
+    } else if (project_type === "static") {
+      content = `# Static site served by Nginx
+FROM nginx:1.27-alpine AS runner
+COPY ./public /usr/share/nginx/html
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1/ || exit 1
+CMD ["nginx", "-g", "daemon off;"]
+`;
+    } else if (project_type === "python" || project_type === "fastapi") {
+      const startCmd = project_type === "fastapi"
+        ? 'CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]'
+        : 'CMD ["python", "main.py"]';
+      content = `# Multi-stage hardened Python production Dockerfile${project_type === "fastapi" ? " (FastAPI)" : ""}
+FROM python:3.12-slim AS deps
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+FROM python:3.12-slim AS runner
+WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1 \\
+    PYTHONUNBUFFERED=1 \\
+    PORT=${project_type === "fastapi" ? "8000" : "3000"}
+
+RUN useradd --create-home appuser
+COPY --chown=appuser:appuser . .
+COPY --from=deps /install /usr/local
+USER appuser
+
+EXPOSE ${project_type === "fastapi" ? "8000" : "3000"}
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \\
+  CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:' + __import__('os').environ.get('PORT','${project_type === "fastapi" ? "8000" : "3000"}'))" || exit 1
+
+${startCmd}
+`;
+    } else if (project_type === "go") {
+      content = `# Multi-stage hardened Go production Dockerfile
+FROM golang:1.22-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/app .
+
+FROM alpine:3.20 AS runner
+RUN adduser -D -u 10001 appuser
+COPY --chown=appuser:appuser --from=builder /bin/app /usr/local/bin/app
+ENV PORT=3000
+USER appuser
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://127.0.0.1:3000/health || exit 1
+ENTRYPOINT ["/usr/local/bin/app"]
+`;
+    } else {
+      return `ERROR: Unsupported project_type "${project_type}". Supported: node, nextjs, react, static, python, fastapi, go.`;
     }
   } else if (target === "docker_compose") {
     content = `version: "3.8"
@@ -1533,6 +1661,10 @@ jobs:
     defaultFilename = ".github/workflows/deploy.yml";
   }
 
+  if (!content) {
+    return `ERROR: Invalid target "${target}". Allowed: docker, docker_compose, nginx, cicd.`;
+  }
+
   const dest = output_file || defaultFilename;
   if (output_file) {
     await fs.mkdir(path.dirname(path.resolve(dest)), { recursive: true });
@@ -1621,8 +1753,9 @@ export async function portScanner({
 
   if (action === "check_ssl" && url) {
     const parsed = new URL(url);
+    const sslPort = Number(parsed.port) || 443;
     return new Promise((resolve) => {
-      const socket = tls.connect(443, parsed.hostname, { servername: parsed.hostname }, () => {
+      const socket = tls.connect(sslPort, parsed.hostname, { servername: parsed.hostname }, () => {
         const cert = socket.getPeerCertificate();
         socket.destroy();
         if (!cert || !cert.valid_to) {

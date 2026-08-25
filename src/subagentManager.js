@@ -297,6 +297,8 @@ class SubagentManager extends EventEmitter {
     this.nextTaskId = 1;
     this.notificationQueue = [];
     this.initDefaults();
+    // Awaited before any save to avoid overwriting agents.json mid-load
+    this.ready = this.loadCustomAgents();
   }
 
   initDefaults() {
@@ -323,6 +325,7 @@ class SubagentManager extends EventEmitter {
 
   async saveCustomAgents() {
     try {
+      await this.ready; // never persist before custom agents are loaded
       const customList = Array.from(this.agents.values()).filter(
         (a) => !DEFAULT_AGENTS[a.name.toLowerCase()]
       );
@@ -336,6 +339,9 @@ class SubagentManager extends EventEmitter {
   registerAgent(agentDef) {
     if (!agentDef.name) throw new Error("Agent definition must have a 'name'.");
     const key = agentDef.name.toLowerCase();
+    if (DEFAULT_AGENTS[key]) {
+      throw new Error(`"${agentDef.name}" is a reserved core agent name. Choose a different name (e.g. "${key}_custom").`);
+    }
     this.agents.set(key, {
       name: agentDef.name,
       role: agentDef.role || agentDef.name,
@@ -401,6 +407,7 @@ class SubagentManager extends EventEmitter {
       logs: [],
       background,
       cancelled: false,
+      abortController: new AbortController(),
     };
 
     this.tasks.set(taskId, taskObj);
@@ -417,9 +424,11 @@ class SubagentManager extends EventEmitter {
       ];
 
       // Filter tools according to agent permissions
+      const allowedSet = Array.isArray(agent.allowedTools)
+        ? new Set(agent.allowedTools)
+        : null; // null => full access
       let availableTools = TOOL_DEFS;
-      if (Array.isArray(agent.allowedTools)) {
-        const allowedSet = new Set(agent.allowedTools);
+      if (allowedSet) {
         availableTools = TOOL_DEFS.filter((t) => allowedSet.has(t.function.name));
       }
 
@@ -451,6 +460,7 @@ class SubagentManager extends EventEmitter {
             model: modelToUse,
             messages: history,
             tools: availableTools,
+            signal: taskObj.abortController.signal,
             onThinking: (t) => {
               subThinking += t;
               appendTaskLog({ type: "thinking", text: t, agent: agent.name, taskId });
@@ -483,6 +493,16 @@ class SubagentManager extends EventEmitter {
               }
             }
 
+            // Enforce tool permissions at execution time (defense against
+            // models emitting tools outside their allowlist, e.g. via
+            // prompt injection from fetched web content).
+            if (allowedSet && !allowedSet.has(name)) {
+              const deniedMsg = `ERROR: tool "${name}" is not permitted for agent "${agent.name}". Allowed tools: ${agent.allowedTools.join(", ")}`;
+              appendTaskLog({ type: "tool_denied", name, agent: agent.name, taskId });
+              history.push({ role: "tool", content: deniedMsg, tool_name: name });
+              continue;
+            }
+
             appendTaskLog({ type: "tool_call", name, args, agent: agent.name, taskId });
             const result = await runTool(name, args);
             appendTaskLog({ type: "tool_result", name, result, agent: agent.name, taskId });
@@ -495,9 +515,14 @@ class SubagentManager extends EventEmitter {
           taskObj.output = taskObj.output || "(Sub-agent completed without final text)";
         }
       } catch (err) {
-        taskObj.status = "failed";
-        taskObj.error = err.message;
-        taskObj.output = `ERROR in sub-agent "${agent.name}": ${err.message}`;
+        if (taskObj.cancelled || err.name === "AbortError") {
+          taskObj.status = "killed";
+          taskObj.output = "(Sub-agent task cancelled by user/parent)";
+        } else {
+          taskObj.status = "failed";
+          taskObj.error = err.message;
+          taskObj.output = `ERROR in sub-agent "${agent.name}": ${err.message}`;
+        }
       } finally {
         taskObj.endTime = new Date();
         const durationSec = Math.round((taskObj.endTime - taskObj.startTime) / 1000);
@@ -613,6 +638,7 @@ class SubagentManager extends EventEmitter {
     if (task.status !== "running") return `Sub-agent task ${id} is already ${task.status}.`;
     task.cancelled = true;
     task.status = "killed";
+    try { task.abortController?.abort(); } catch (_) { /* ignore */ }
     return `Cancelled sub-agent task ${id}.`;
   }
 

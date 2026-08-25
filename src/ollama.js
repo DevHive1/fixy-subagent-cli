@@ -3,6 +3,38 @@ const DEFAULT_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
 let activeModel = process.env.FIXY_MODEL || null;
 
 /**
+ * Resolve whether the "thinking" feature should be requested.
+ * Env override: FIXY_THINK=1/true/on forces on, 0/false/off forces off.
+ * Default: enabled, but chatStream() auto-retries without it when a model
+ * does not support thinking (Ollama returns HTTP 400 mentioning "think").
+ */
+function resolveThinkFlag(explicit) {
+  if (typeof explicit === "boolean") return explicit;
+  const env = String(process.env.FIXY_THINK ?? "").trim().toLowerCase();
+  if (env) return env === "1" || env === "true" || env === "on";
+  return true;
+}
+
+/**
+ * Merge streamed tool_call chunks: Ollama may split tool calls across
+ * multiple NDJSON messages; keep every call, replacing by index when given.
+ */
+function mergeToolCalls(prev, next) {
+  const out = Array.isArray(prev) ? [...prev] : [];
+  for (const tc of next) {
+    const idx = typeof tc?.index === "number" ? tc.index : -1;
+    const sig = JSON.stringify(tc.function ?? tc);
+    const existingIdx = out.findIndex((o) => JSON.stringify(o.function ?? o) === sig);
+    if (idx >= 0 && idx < out.length && existingIdx === -1) {
+      out[idx] = tc;
+    } else if (existingIdx === -1) {
+      out.push(tc);
+    }
+  }
+  return out;
+}
+
+/**
  * Get the currently active model name.
  */
 export function getActiveModel() {
@@ -130,19 +162,23 @@ export async function chatStream({
   host = DEFAULT_HOST,
   onThinking,
   onContent,
+  signal,
 }) {
   const failedModels = [];
   let targetModel = model || (await resolveAvailableModel(null, host));
+  let attemptThink = resolveThinkFlag();
 
   while (targetModel) {
     try {
-      const body = { model: targetModel, messages, stream: true, think: true };
+      const body = { model: targetModel, messages, stream: true };
       if (tools && tools.length) body.tools = tools;
+      if (attemptThink) body.think = true;
 
       const res = await fetch(`${host}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal,
       });
 
       if (!res.ok) {
@@ -154,9 +190,20 @@ export async function chatStream({
         } catch {
           // use raw text
         }
+        // Model does not support thinking → retry same model without it
+        if (attemptThink && res.status === 400 && /think/i.test(cleanMsg)) {
+          attemptThink = false;
+          continue;
+        }
         const err = new Error(`Ollama /api/chat failed (${res.status}): ${cleanMsg}`);
         err.status = res.status;
         throw err;
+      }
+
+      if (signal?.aborted) {
+        const abortErr = new Error("Request aborted");
+        abortErr.name = "AbortError";
+        throw abortErr;
       }
 
       const reader = res.body.getReader();
@@ -194,7 +241,7 @@ export async function chatStream({
             onContent?.(msg.content);
           }
           if (msg?.tool_calls?.length) {
-            toolCalls = msg.tool_calls;
+            toolCalls = mergeToolCalls(toolCalls, msg.tool_calls);
           }
         }
       }

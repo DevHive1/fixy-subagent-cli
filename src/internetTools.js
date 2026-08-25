@@ -324,53 +324,55 @@ export async function webSearch({
 // 2. web_scrape — CSS-selector based extraction (with structured fields)
 // ===========================================================================
 
-/** Simple CSS selector matcher (supports tag, #id, .class, [attr], combinators) */
-function matchSelector(node, selector) {
-  // node: { tag, id, classes: [], attrs: {}, text }
-  selector = selector.trim();
-  if (!selector) return false;
-
-  // Compound selectors separated by combinators
-  // We support: tag, #id, .class, [attr], and a few simple combinators
-  const parts = selector.split(/\s+(?![^\[]*\])/).map((s) => s.trim()).filter(Boolean);
-  // Process last part against node
-  const last = parts[parts.length - 1];
-  if (!matchSimpleSelector(node, last)) return false;
-
-  // For now we don't implement full ancestor traversal; we only do a single
-  // match against the most recent descendant. For deeper traversal users
-  // should use web_extract_links / web_extract_metadata.
-  return true;
+/** Find the index of the closing tag for `tagName`, honoring nesting depth.
+ *  Returns html.length when no matching close tag exists (unclosed element).
+ */
+function findMatchingClose(html, fromIdx, tagName) {
+  if (/^(area|base|br|col|embed|hr|img|input|link|meta|source|track|wbr)$/i.test(tagName)) {
+    return fromIdx; // void element — no closing tag
+  }
+  const tokenRe = new RegExp(`<${tagName}(\\s[^>]*)?>|</${tagName}\\s*>`, "gi");
+  tokenRe.lastIndex = fromIdx;
+  let depth = 1;
+  let m;
+  while ((m = tokenRe.exec(html)) !== null) {
+    if (m[0][1] === "/") {
+      depth--;
+      if (depth === 0) return m.index;
+    } else {
+      depth++;
+    }
+  }
+  return html.length;
 }
 
-function matchSimpleSelector(node, sel) {
-  // Split into pieces: tag#id.class[attr=val]
-  // Tag can include digits (h1, h2, ...) and wildcard (*).
-  const re = /([a-zA-Z][a-zA-Z0-9]*|\*)?(#[a-zA-Z0-9_-]+)?((?:\.[a-zA-Z0-9_-]+)+)?((?:\[[^\]]+\])*)/;
-  const m = sel.match(re);
+/** Match one compound CSS selector (tag, #id, .class, [attr...]) against a node.
+ *  Combinators ("div p") are not supported — only the last simple part is
+ *  honored; use web_extract_links / web_extract_metadata for deeper needs.
+ */
+function matchSimple(node, sel) {
+  sel = String(sel || "").trim().split(/\s+/).pop(); // last compound segment only
+  if (!sel) return false;
+  const m = sel.match(/^([a-zA-Z][a-zA-Z0-9-]*|\*)?(#[a-zA-Z0-9_-]+)?((?:\.[a-zA-Z0-9_-]+)*)?((?:\[[^\]]+\])*)?$/);
   if (!m) return false;
-  const tag = m[1];
-  const id = m[2];
-  const classes = m[3] ? m[3].split(".").filter(Boolean) : [];
-  const attrGroup = m[4] || "";
+  const [, tagRaw, idRaw, classesRaw, attrGroup = ""] = m;
 
-  if (tag && tag !== "*" && node.tag.toLowerCase() !== tag.toLowerCase()) return false;
-  if (id && node.id !== id.slice(1)) return false;
-  if (classes.length) {
-    for (const c of classes) {
-      if (!node.classes.includes(c.slice(1))) return false;
+  if (tagRaw && tagRaw !== "*" && node.tag !== tagRaw.toLowerCase()) return false;
+  if (idRaw && node.id !== idRaw.slice(1)) return false;
+  if (classesRaw) {
+    for (const c of classesRaw.split(".").filter(Boolean)) {
+      if (!node.classes.includes(c)) return false;
     }
   }
   if (attrGroup) {
     const attrRe = /\[([a-zA-Z0-9_-]+)(?:([~^$*|]?=)"?([^"\]]+)"?)?\]/g;
     let am;
     while ((am = attrRe.exec(attrGroup)) !== null) {
-      const name = am[1];
+      const name = am[1].toLowerCase();
       const op = am[2] || "";
       const val = am[3] || "";
       const actual = node.attrs[name];
       if (actual === undefined) return false;
-      if (!op) continue; // presence-only
       switch (op) {
         case "=": if (actual !== val) return false; break;
         case "*=": if (!actual.includes(val)) return false; break;
@@ -382,29 +384,6 @@ function matchSimpleSelector(node, sel) {
     }
   }
   return true;
-}
-
-/** Parse an HTML chunk into a flat list of element nodes with attrs */
-function parseNodes(html) {
-  const re = /<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^>]*?)?)\s*(\/?)>/g;
-  const nodes = [];
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const tag = m[1].toLowerCase();
-    if (["script", "style", "noscript", "template"].includes(tag)) continue;
-    const attrsRaw = m[2] || "";
-    const id = (attrsRaw.match(/\bid\s*=\s*"([^"]+)"/) || attrsRaw.match(/\bid\s*=\s*'([^']+)'/) || [, ""])[1];
-    const classMatch = attrsRaw.match(/\bclass\s*=\s*"([^"]+)"/) || attrsRaw.match(/\bclass\s*=\s*'([^']+)'/);
-    const classes = classMatch ? classMatch[1].split(/\s+/).filter(Boolean) : [];
-    const attrs = {};
-    const attrRe = /([a-zA-Z_:][a-zA-Z0-9_:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
-    let am;
-    while ((am = attrRe.exec(attrsRaw)) !== null) {
-      attrs[am[1].toLowerCase()] = decodeEntities(am[2] ?? am[3] ?? am[4] ?? "");
-    }
-    nodes.push({ tag, id, classes, attrs });
-  }
-  return nodes;
 }
 
 export async function webScrape({
@@ -429,27 +408,6 @@ export async function webScrape({
   if (r.error) return `ERROR web_scrape: ${r.error}`;
 
   const base = base_url || r.finalUrl || url;
-  const nodes = parseNodes(r.text);
-
-  function extractFor(sel) {
-    const out = [];
-    for (const n of nodes) {
-      if (matchSelector(n, sel)) {
-        const item = { tag: n.tag, id: n.id, classes: n.classes };
-        if (attr) {
-          item[attr] = resolveUrl(n.attrs[attr] || "", base);
-        } else {
-          // We don't have inner text per node in flat parse; we use a regex
-          // search for the next text within r.text following this tag.
-          item.text = "";
-        }
-        if (include_html) item.html = n.tag;
-        out.push(item);
-        if (out.length >= max_items) break;
-      }
-    }
-    return out;
-  }
 
   const out = [`=== Web Scrape: ${url} ===`];
   out.push(`Status: HTTP ${r.status} | Content-Type: ${r.contentType} | Bytes: ${r.bytes}${r.truncated ? " (truncated)" : ""}`);
@@ -475,13 +433,10 @@ export async function webScrape({
         attrs[am[1].toLowerCase()] = decodeEntities(am[2] ?? am[3] ?? am[4] ?? "");
       }
       const node = { tag, id, classes, attrs };
-      if (matchSelector(node, sel)) {
-        // Find inner text
+      if (matchSimple(node, sel)) {
+        // Find inner text (honors nesting depth for the same tag)
         const start = m.index + m[0].length;
-        // Find matching close tag (shallow — first occurrence)
-        const closeRe = new RegExp(`</${tag}>`, "i");
-        const closeMatch = closeRe.exec(r.text.slice(start));
-        const end = closeMatch ? start + closeMatch.index : r.text.length;
+        const end = findMatchingClose(r.text, start, tag);
         const innerHtml = r.text.slice(start, end);
         const text = htmlToText(innerHtml);
         const item = { tag, id, classes: classes.join(" "), text };
@@ -559,12 +514,14 @@ export async function webCrawl({
   const excludeRe = exclude_pattern ? new RegExp(exclude_pattern) : null;
 
   const visited = new Set();
+  const enqueued = new Set([start_url]);
   const queue = [{ url: start_url, depth: 0 }];
   const results = [];
 
   function shouldVisit(u) {
     if (!u) return false;
     if (visited.has(u)) return false;
+    if (enqueued.has(u)) return false;
     if (!/^https?:\/\//i.test(u)) return false;
     try {
       const h = new URL(u).hostname.toLowerCase();
@@ -598,6 +555,7 @@ export async function webCrawl({
         const abs = resolveUrl(href, r.finalUrl || url);
         links.push({ href: abs, text });
         if (depth < max_depth && shouldVisit(abs)) {
+          enqueued.add(abs);
           queue.push({ url: abs, depth: depth + 1 });
         }
       }

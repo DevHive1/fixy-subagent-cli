@@ -28,9 +28,15 @@ export async function launchAgentCreator(reader) {
   const description = descInput?.trim() || "Specialized assistant";
 
   console.log(colors.accent.bold("\n4. System Prompt / Detailed Instructions:"));
-  console.log(colors.dim("   (Paste or type instructions. You can use multi-line text. Finish with Enter)"));
-  const promptInput = await reader.question(colors.primary("   » "));
-  const systemPrompt = promptInput?.trim() || `You are ${role}, a high-precision specialized agent. Focus strictly on your designated scope.`;
+  console.log(colors.dim("   (Multi-line supported. Type your instructions; finish with a single '.' on its own line)"));
+  const promptLines = [];
+  while (true) {
+    const line = await reader.question(colors.primary("   » "));
+    if (line === undefined || line === null) break; // Ctrl+D / Ctrl+C
+    if (line.trim() === ".") break;
+    promptLines.push(line);
+  }
+  const systemPrompt = promptLines.join("\n").trim() || `You are ${role}, a high-precision specialized agent. Focus strictly on your designated scope.`;
 
   console.log(colors.accent.bold("\n5. Select Allowed Tools:"));
   const allToolNames = TOOL_DEFS.map((t) => t.function.name);

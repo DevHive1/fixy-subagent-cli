@@ -4,6 +4,7 @@ import { TOOL_DEFS, runTool } from "./tools.js";
 import { taskManager } from "./taskManager.js";
 import { subagentManager } from "./subagentManager.js";
 import { colors } from "./theme.js";
+import { getMode } from "./permissions.js";
 
 let globalMaxRounds = parseInt(process.env.FIXY_MAX_ROUNDS, 10) || 30;
 
@@ -28,7 +29,7 @@ export function setMaxRounds(n) {
 }
 
 const SYSTEM_PROMPT = `You are Fixy (Edition 2.0), an advanced autonomous multi-agent engineering system running directly in the user's terminal.
-You have access to an extensive suite of 33 precision tools, 12 specialized sub-agents, a background process engine, an autonomous Agent Creator, dynamic rounds limit controls, and highest-standards construction capabilities.
+You have access to an extensive suite of 42 precision tools, 12 specialized sub-agents, a background process engine, an autonomous Agent Creator, dynamic rounds limit controls, and highest-standards construction capabilities.
 
 Core Capabilities:
 1. Full-Stack Web, Frontend & Backend Engineering:
@@ -93,6 +94,12 @@ export async function runTurn({
     enrichedMessage = `${notifBlock}\n\n${userMessage}`;
   }
 
+  const modeLine =
+    getMode() === "auto"
+      ? "[MODE: AUTO-DRIVE — tools execute without user approval]"
+      : "[MODE: CONFIRM — dangerous tool calls require user y/n approval; sub-agents cannot perform write/exec actions in this mode]";
+  enrichedMessage = `${modeLine}\n\n${enrichedMessage}`;
+
   if (history.length === 0) {
     history.push({ role: "system", content: SYSTEM_PROMPT });
   }
@@ -130,7 +137,7 @@ export async function runTurn({
       }
 
       onToolCall?.(name, args);
-      const result = await runTool(name, args);
+      const result = await runTool(name, args, { interactive: true });
       onToolResult?.(name, result);
       history.push({ role: "tool", content: result, tool_name: name });
     }

@@ -2,12 +2,13 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { taskManager } from "./taskManager.js";
 import { subagentManager } from "./subagentManager.js";
 import { getActiveModel, resolveAvailableModel } from "./ollama.js";
 import { setMaxRounds, getMaxRounds } from "./agent.js";
+import { requestApproval } from "./permissions.js";
 import {
   webScaffold,
   frontendInspector,
@@ -34,12 +35,30 @@ import {
 } from "./internetTools.js";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 15000;
 
 function truncate(str) {
   if (typeof str !== "string") str = String(str ?? "");
   if (str.length <= MAX_OUTPUT) return str;
   return str.slice(0, MAX_OUTPUT) + `\n...[truncated, ${str.length - MAX_OUTPUT} more chars]`;
+}
+
+/**
+ * Split a shell-like argument string into a safe argv array (honors
+ * single/double quotes). Used instead of shell string interpolation to
+ * prevent command injection via model-provided arguments.
+ */
+function tokenizeArgs(str) {
+  const tokens = [];
+  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(String(str ?? ""))) !== null) {
+    if (m[1] !== undefined) tokens.push(m[1].replace(/\\(["\\])/g, "$1"));
+    else if (m[2] !== undefined) tokens.push(m[2]);
+    else tokens.push(m[3]);
+  }
+  return tokens;
 }
 
 // In-memory persistent scratchpad for the session
@@ -173,7 +192,7 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "batch_edit",
-      description: "Perform search and replace across multiple files matching a pattern.",
+      description: "Perform literal (exact-string, non-regex) search and replace across multiple files matching a pattern.",
       parameters: {
         type: "object",
         properties: {
@@ -546,13 +565,14 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "env_manager",
-      description: "Inspect, list, parse .env files, or check active environment variables safely.",
+      description: "Inspect, list, parse .env files, or check active environment variables safely. Secret-looking variables (KEY/SECRET/TOKEN/PASS/CRED/AUTH) are masked unless reveal=true.",
       parameters: {
         type: "object",
         properties: {
           action: { type: "string", enum: ["list", "get", "read_dotenv"], description: "Action to perform." },
           variable_name: { type: "string", description: "Variable name when action is 'get'." },
           dotenv_path: { type: "string", description: "Path to .env file when action is 'read_dotenv'." },
+          reveal: { type: "boolean", description: "Explicitly reveal secret-looking values instead of masking them (default false)." },
         },
         required: ["action"],
       },
@@ -1004,14 +1024,17 @@ async function listDir({ path: p = ".", max_depth = 1 }) {
 
 async function searchCode({ pattern, path: dir = ".", case_sensitive = false }) {
   try {
-    const flags = case_sensitive ? "-n --max-count 10" : "-n -i --max-count 10";
-    const { stdout } = await execAsync(
-      `rg ${flags} -- ${JSON.stringify(pattern)} ${JSON.stringify(dir)}`,
-      { maxBuffer: 5 * 1024 * 1024 }
-    );
+    const args = ["-n", "--max-count", "10"];
+    if (!case_sensitive) args.push("-i");
+    args.push("-e", String(pattern), dir);
+    const { stdout } = await execFileAsync("rg", args, {
+      maxBuffer: 5 * 1024 * 1024,
+      timeout: 30000,
+    });
     return truncate(stdout || "(no matches found)");
   } catch (err) {
-    if (err.stdout !== undefined && err.code === 1) return "(no matches found)";
+    if (err.code === 1 && err.stdout !== undefined) return "(no matches found)";
+    // ENOENT (rg missing) or other rg error → fall through to the safe JS walker
   }
 
   // Fallback scanner
@@ -1172,20 +1195,21 @@ async function gitAction({ action, args = "" }) {
     return `ERROR: Invalid git action "${action}". Allowed: ${allowed.join(", ")}`;
   }
 
-  let cmd = `git ${action}`;
+  // Build an argv array — never interpolate into a shell string.
+  let gitArgs;
   if (action === "log" && !args) {
-    cmd = `git log -n 10 --oneline --graph --decorate`;
+    gitArgs = ["log", "-n", "10", "--oneline", "--graph", "--decorate"];
   } else if (action === "status" && !args) {
-    cmd = `git status -s`;
-  } else if (args) {
-    cmd = `git ${action} ${args}`;
+    gitArgs = ["status", "-s"];
+  } else {
+    gitArgs = [action, ...tokenizeArgs(args)];
   }
 
   try {
-    const { stdout, stderr } = await execAsync(cmd, { timeout: 30000 });
-    return truncate(`$ ${cmd}\n${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`);
+    const { stdout, stderr } = await execFileAsync("git", gitArgs, { timeout: 30000, maxBuffer: 5 * 1024 * 1024 });
+    return truncate(`$ git ${gitArgs.join(" ")}\n${stdout}${stderr ? `\n[stderr]\n${stderr}` : ""}`);
   } catch (err) {
-    return truncate(`$ ${cmd}\n[exit code ${err.code ?? 1}]\n${err.stdout || ""}\n[stderr]\n${err.stderr || err.message}`);
+    return truncate(`$ git ${gitArgs.join(" ")}\n[exit code ${err.code ?? 1}]\n${err.stdout || ""}\n[stderr]\n${err.stderr || err.message}`);
   }
 }
 
@@ -1450,11 +1474,11 @@ async function fileInfo({ path: p }) {
   }
 }
 
-async function envManager({ action, variable_name, dotenv_path = ".env" }) {
+const SECRET_KEY_RE = /(KEY|SECRET|TOKEN|PASS|CRED|AUTH)/i;
+
+async function envManager({ action, variable_name, dotenv_path = ".env", reveal = false }) {
   if (action === "list") {
-    const safeKeys = Object.keys(process.env).filter(
-      (k) => !k.includes("KEY") && !k.includes("SECRET") && !k.includes("TOKEN") && !k.includes("PASS")
-    );
+    const safeKeys = Object.keys(process.env).filter((k) => !SECRET_KEY_RE.test(k));
     return `Available Safe Environment Variables:\n` + safeKeys.slice(0, 40).join("\n");
   }
 
@@ -1462,6 +1486,9 @@ async function envManager({ action, variable_name, dotenv_path = ".env" }) {
     if (!variable_name) return "ERROR: 'variable_name' required.";
     const val = process.env[variable_name];
     if (val === undefined) return `Environment variable "${variable_name}" is NOT set.`;
+    if (SECRET_KEY_RE.test(variable_name) && !reveal) {
+      return `${variable_name}=******** (masked secret — pass reveal=true to view)`;
+    }
     return `${variable_name}=${val}`;
   }
 
@@ -1474,7 +1501,7 @@ async function envManager({ action, variable_name, dotenv_path = ".env" }) {
         if (eqIdx === -1) return line;
         const key = line.slice(0, eqIdx);
         const val = line.slice(eqIdx + 1);
-        if (key.match(/KEY|SECRET|PASS|TOKEN|AUTH/i)) {
+        if (!reveal && SECRET_KEY_RE.test(key)) {
           return `${key}=******** (masked)`;
         }
         return `${key}=${val}`;
@@ -1731,13 +1758,37 @@ const HANDLERS = {
 
 /**
  * Execute a tool call by name with the given arguments.
+ * `interactive: true` marks calls originating from the main conversation,
+ * which may trigger y/n approval prompts in confirm mode. Sub-agent and
+ * background contexts stay non-interactive (dangerous calls are denied).
  */
-export async function runTool(name, args) {
+export async function runTool(name, args, { interactive = false } = {}) {
   const handler = HANDLERS[name];
   if (!handler) return `ERROR: unknown tool "${name}"`;
   try {
+    const approval = await requestApproval(name, args || {}, { interactive });
+    if (!approval.allowed) {
+      return `ERROR: Permission denied for tool "${name}": ${approval.reason}`;
+    }
     return await handler(args || {});
   } catch (err) {
     return `ERROR: ${err.message}`;
   }
+}
+
+// --- Testable internals ------------------------------------------------------
+
+export { tokenizeArgs, parseLineRanges };
+
+export function exportSessionMemory() {
+  return Object.fromEntries(sessionMemory);
+}
+
+export function importSessionMemory(obj) {
+  if (!obj || typeof obj !== "object") return;
+  for (const [k, v] of Object.entries(obj)) sessionMemory.set(k, String(v));
+}
+
+export function clearSessionMemory() {
+  sessionMemory.clear();
 }

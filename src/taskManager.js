@@ -188,6 +188,19 @@ class TaskManager extends EventEmitter {
     }
     return count;
   }
+
+  /**
+   * Terminate all running child processes (best-effort) — used on shutdown
+   * so background commands don't outlive the CLI as orphans.
+   */
+  stopAll(signal = "SIGTERM") {
+    for (const t of this.tasks.values()) {
+      if (t.status === "running") {
+        t.status = "killed";
+        try { t.proc.kill(signal); } catch { /* already dead */ }
+      }
+    }
+  }
 }
 
 export const taskManager = new TaskManager();
