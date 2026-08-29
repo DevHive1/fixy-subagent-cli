@@ -65,9 +65,16 @@ function parseCliArgs(argv) {
       case "--mode":
         opts.mode = argv[++i];
         break;
-      case "--rounds":
-        opts.rounds = parseInt(argv[++i], 10);
+      case "--rounds": {
+        const raw = argv[++i];
+        const parsed = parseInt(raw, 10);
+        if (isNaN(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+          console.error(`error: --rounds requires a positive integer, got "${raw}"`);
+          process.exit(2);
+        }
+        opts.rounds = parsed;
         break;
+      }
       case "-h":
       case "--help":
         opts.help = true;
@@ -552,7 +559,11 @@ async function main() {
   if (cli.mode) setMode(cli.mode);
   else if (!HEADLESS) setMode(process.env.FIXY_MODE || "confirm");
 
-  if (cli.rounds !== null) setMaxRounds(cli.rounds);
+  if (cli.rounds !== null) {
+    try { setMaxRounds(cli.rounds); } catch (e) { console.error(colors.danger(e.message)); process.exit(2); }
+  }
+  // Ensure subagent custom agents loaded before any use
+  try { await subagentManager.ready; } catch {}
   await restoreSessionIfRequested();
 
   if (HEADLESS) {

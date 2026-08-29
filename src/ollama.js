@@ -17,18 +17,50 @@ function resolveThinkFlag(explicit) {
 
 /**
  * Merge streamed tool_call chunks: Ollama may split tool calls across
- * multiple NDJSON messages; keep every call, replacing by index when given.
+ * multiple NDJSON messages; index-based merge with incremental JSON buffering.
  */
 function mergeToolCalls(prev, next) {
   const out = Array.isArray(prev) ? [...prev] : [];
+  const argBuffer = new Map(); // index -> accumulated argument string
   for (const tc of next) {
     const idx = typeof tc?.index === "number" ? tc.index : -1;
-    const sig = JSON.stringify(tc.function ?? tc);
-    const existingIdx = out.findIndex((o) => JSON.stringify(o.function ?? o) === sig);
-    if (idx >= 0 && idx < out.length && existingIdx === -1) {
-      out[idx] = tc;
-    } else if (existingIdx === -1) {
-      out.push(tc);
+    if (idx >= 0) {
+      if (idx < out.length) {
+        const existing = out[idx];
+        // Merge incremental function.arguments if string-chunked
+        if (typeof tc.function?.arguments === "string" && typeof existing.function?.arguments === "string") {
+          const cur = argBuffer.get(idx) ?? existing.function.arguments;
+          const add = tc.function.arguments;
+          const merged = cur + add;
+          argBuffer.set(idx, merged);
+          existing.function.arguments = merged;
+          try { existing.function.arguments = JSON.parse(merged); } catch { /* keep as string until complete */ }
+        } else if (tc.function) {
+          // Shallow merge other fields
+          out[idx] = { ...existing, ...tc, function: { ...existing.function, ...tc.function } };
+        }
+      } else {
+        // Fill gaps if needed
+        while (out.length < idx) out.push({ function: { name: "_gap" } });
+        out.push(tc);
+        if (typeof tc.function?.arguments === "string") argBuffer.set(idx, tc.function.arguments);
+      }
+    } else {
+      // No index: dedup by JSON signature but also handle incremental same-name calls
+      const sig = JSON.stringify(tc.function ?? tc);
+      const existingIdx = out.findIndex((o) => JSON.stringify(o.function ?? o) === sig);
+      if (existingIdx === -1) {
+        // Check if same tool name exists and arguments are incremental
+        const name = tc.function?.name;
+        const sameNameIdx = name ? out.findIndex((o) => o.function?.name === name) : -1;
+        if (sameNameIdx !== -1 && typeof tc.function?.arguments === "string" && typeof out[sameNameIdx].function?.arguments === "string") {
+          const cur = out[sameNameIdx].function.arguments;
+          out[sameNameIdx].function.arguments = cur + tc.function.arguments;
+          try { out[sameNameIdx].function.arguments = JSON.parse(out[sameNameIdx].function.arguments); } catch {}
+        } else {
+          out.push(tc);
+        }
+      }
     }
   }
   return out;
@@ -78,16 +110,17 @@ export async function resolveAvailableModel(preferredModel, host = DEFAULT_HOST,
     const names = pool.map((m) => m.name);
 
     if (preferredModel && !excludeSet.has(preferredModel.toLowerCase())) {
-      const match = names.find(
-        (n) => n.toLowerCase() === preferredModel.toLowerCase() || n.startsWith(preferredModel)
-      );
+      // exact → case-insensitive exact → prefix fallback
+      let match = names.find((n) => n === preferredModel);
+      if (!match) match = names.find((n) => n.toLowerCase() === preferredModel.toLowerCase());
+      if (!match) match = names.find((n) => n.toLowerCase().startsWith(preferredModel.toLowerCase()));
       if (match) return match;
     }
 
     if (activeModel && !excludeSet.has(activeModel.toLowerCase())) {
-      const activeMatch = names.find(
-        (n) => n.toLowerCase() === activeModel.toLowerCase() || n.startsWith(activeModel)
-      );
+      let activeMatch = names.find((n) => n === activeModel);
+      if (!activeMatch) activeMatch = names.find((n) => n.toLowerCase() === activeModel.toLowerCase());
+      if (!activeMatch) activeMatch = names.find((n) => n.toLowerCase().startsWith(activeModel.toLowerCase()));
       if (activeMatch) return activeMatch;
     }
 
@@ -206,7 +239,34 @@ export async function chatStream({
         throw abortErr;
       }
 
-      const reader = res.body.getReader();
+      if (!res.body) {
+        const text = await res.text().catch(() => "");
+        const msg = `Ollama empty response body (status ${res.status}) : ${text.slice(0,500)}`;
+        throw new Error(msg);
+      }
+      // Support both WHATWG ReadableStream and Node 18+ fetch (which may not have getReader)
+      let reader;
+      try {
+        reader = res.body.getReader ? res.body.getReader() : null;
+      } catch { reader = null; }
+      if (!reader) {
+        // Fallback: read as text and parse NDJSON lines in bulk
+        const raw = await res.text();
+        const lines = raw.split("\n").filter(Boolean);
+        let content = "";
+        let thinking = "";
+        let toolCalls = null;
+        for (const line of lines) {
+          let chunk;
+          try { chunk = JSON.parse(line); } catch { continue; }
+          const msg = chunk.message;
+          if (msg?.thinking) { thinking += msg.thinking; onThinking?.(msg.thinking); }
+          if (msg?.content) { content += msg.content; onContent?.(msg.content); }
+          if (msg?.tool_calls?.length) toolCalls = mergeToolCalls(toolCalls, msg.tool_calls);
+        }
+        setActiveModel(targetModel);
+        return { role: "assistant", content, thinking: thinking || undefined, tool_calls: toolCalls || undefined };
+      }
       const decoder = new TextDecoder();
       let buffer = "";
       let content = "";

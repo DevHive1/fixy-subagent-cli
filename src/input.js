@@ -91,8 +91,11 @@ export class LineReader {
       this.savedBuffer = this._buffer;
     }
 
-    const nextIndex = this.historyIndex + (direction === -1 ? 1 : -1);
-    if (nextIndex < -1 || nextIndex >= this.history.length) return;
+    let nextIndex = this.historyIndex + (direction === -1 ? 1 : -1);
+    // Clamp
+    if (nextIndex < -1) nextIndex = -1;
+    if (nextIndex >= this.history.length) nextIndex = this.history.length - 1;
+    if (nextIndex === this.historyIndex) return;
 
     this.historyIndex = nextIndex;
     const targetText = this.historyIndex === -1 ? this.savedBuffer : this.history[this.history.length - 1 - this.historyIndex];
@@ -160,14 +163,17 @@ export class LineReader {
       this.stdout.write(`${ESC}[?2004h`);
       this._buffer = "";
       this._active = true;
-      this._resolve = resolve;
+      this._resolve = (v) => {
+        try { this.stdout.write(`${ESC}[?2004l`); } catch {}
+        resolve(v);
+      };
     });
   }
 
   close() {
-    this.stdout.write(`${ESC}[?2004l`);
-    this.stdin.off("data", this._onDataHandler);
-    if (this.stdin.isTTY) this.stdin.setRawMode(false);
-    this.stdin.pause();
+    try { this.stdout.write(`${ESC}[?2004l`); } catch {}
+    try { this.stdin.off("data", this._onDataHandler); } catch {}
+    try { if (this.stdin.isTTY) this.stdin.setRawMode(false); } catch {}
+    try { this.stdin.pause(); } catch {}
   }
 }

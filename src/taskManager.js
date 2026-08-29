@@ -48,6 +48,7 @@ class TaskManager extends EventEmitter {
       maxLogs: 500,
       background,
       proc,
+      killedRequested: false,
     };
 
     const appendLog = (type, data) => {
@@ -95,7 +96,9 @@ class TaskManager extends EventEmitter {
       task.endTime = new Date();
       task.exitCode = code;
       task.signal = signal;
-      if (task.status === "running") {
+      if (task.killedRequested) {
+        task.status = "killed";
+      } else if (task.status === "running") {
         task.status = code === 0 ? "completed" : "failed";
       }
 
@@ -164,9 +167,10 @@ class TaskManager extends EventEmitter {
     const task = this.tasks.get(id);
     if (!task) throw new Error(`Task "${id}" not found.`);
     if (task.status !== "running") return `Task ${id} is already ${task.status}.`;
-    task.status = "killed";
-    task.proc.kill(signal);
-    return `Sent ${signal} to task ${id}`;
+    task.killedRequested = true;
+    // Defer status to close handler to preserve true exitCode if already exited
+    try { task.proc.kill(signal); } catch (e) { task.status = "killed"; }
+    return `Sent ${signal} to task ${id} (killedRequested)`;
   }
 
   /**
@@ -196,8 +200,8 @@ class TaskManager extends EventEmitter {
   stopAll(signal = "SIGTERM") {
     for (const t of this.tasks.values()) {
       if (t.status === "running") {
-        t.status = "killed";
-        try { t.proc.kill(signal); } catch { /* already dead */ }
+        t.killedRequested = true;
+        try { t.proc.kill(signal); } catch { t.status = "killed"; }
       }
     }
   }

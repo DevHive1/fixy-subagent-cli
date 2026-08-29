@@ -34,32 +34,22 @@ import {
   webSitemap,
 } from "./internetTools.js";
 
+import { truncate, tokenizeArgs as utilTokenizeArgs, globToRegex, parseDotenvLine, truncateMiddle } from "./utils.js";
+import { MAX_OUTPUT as CONFIG_MAX } from "./config.js";
+
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
-const MAX_OUTPUT = 15000;
+// Keep local MAX_OUTPUT for compatibility but sourced from config
+const MAX_OUTPUT = CONFIG_MAX;
 
-function truncate(str) {
-  if (typeof str !== "string") str = String(str ?? "");
-  if (str.length <= MAX_OUTPUT) return str;
-  return str.slice(0, MAX_OUTPUT) + `\n...[truncated, ${str.length - MAX_OUTPUT} more chars]`;
-}
+function truncateLocal(str) { return truncate(str); }
 
 /**
  * Split a shell-like argument string into a safe argv array (honors
  * single/double quotes). Used instead of shell string interpolation to
  * prevent command injection via model-provided arguments.
  */
-function tokenizeArgs(str) {
-  const tokens = [];
-  const re = /"((?:[^"\\]|\\.)*)"|'([^']*)'|(\S+)/g;
-  let m;
-  while ((m = re.exec(String(str ?? ""))) !== null) {
-    if (m[1] !== undefined) tokens.push(m[1].replace(/\\(["\\])/g, "$1"));
-    else if (m[2] !== undefined) tokens.push(m[2]);
-    else tokens.push(m[3]);
-  }
-  return tokens;
-}
+function tokenizeArgs(str) { return utilTokenizeArgs(str); }
 
 // In-memory persistent scratchpad for the session
 const sessionMemory = new Map();
@@ -946,7 +936,17 @@ export const TOOL_DEFS = [
 
 // --- Tool Implementations --------------------------------------------------
 
+function isPathAllowed(p) {
+  if (!process.env.FIXY_SANDBOX) return true;
+  const resolved = path.resolve(p);
+  const cwd = path.resolve(process.cwd());
+  // allow siblings of cwd + cwd itself, but block absolute escapes to /etc etc.
+  if (resolved.startsWith(cwd)) return true;
+  if (process.env.FIXY_ALLOW_OUTSIDE === "1") return true;
+  return false;
+}
 async function readFile({ path: p, start_line, end_line, show_line_numbers = true }) {
+  if (!isPathAllowed(p)) return `ERROR: sandbox blocked read outside cwd: ${p} (set FIXY_ALLOW_OUTSIDE=1 to allow)`;
   const content = await fs.readFile(p, "utf8");
   const lines = content.split("\n");
   const start = Math.max(1, start_line || 1);
@@ -967,12 +967,14 @@ async function readFile({ path: p, start_line, end_line, show_line_numbers = tru
 }
 
 async function writeFile({ path: p, content }) {
+  if (!isPathAllowed(p)) return `ERROR: sandbox blocked write outside cwd: ${p}`;
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, content, "utf8");
   return `Successfully wrote ${content.length} characters to ${p}`;
 }
 
 async function editFile({ path: p, old_str, new_str }) {
+  if (!isPathAllowed(p)) return `ERROR: sandbox blocked edit outside cwd: ${p}`;
   const content = await fs.readFile(p, "utf8");
   const occurrences = content.split(old_str).length - 1;
   if (occurrences === 0) {
@@ -1109,8 +1111,7 @@ async function findFiles({ path: dir = ".", name_pattern, extension, type = "any
 
   let nameRegex = null;
   if (name_pattern) {
-    const globPattern = name_pattern.replace(/\./g, "\\.").replace(/\*/g, ".*").replace(/\?/g, ".");
-    nameRegex = new RegExp(`^${globPattern}$`, "i");
+    try { nameRegex = globToRegex(name_pattern, "i"); } catch { nameRegex = new RegExp(name_pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"); }
   }
 
   async function walk(current) {
@@ -1495,17 +1496,18 @@ async function envManager({ action, variable_name, dotenv_path = ".env", reveal 
   if (action === "read_dotenv") {
     try {
       const content = await fs.readFile(dotenv_path, "utf8");
-      const lines = content.split("\n").filter((l) => l.trim() && !l.trim().startsWith("#"));
-      const masked = lines.map((line) => {
-        const eqIdx = line.indexOf("=");
-        if (eqIdx === -1) return line;
-        const key = line.slice(0, eqIdx);
-        const val = line.slice(eqIdx + 1);
-        if (!reveal && SECRET_KEY_RE.test(key)) {
-          return `${key}=******** (masked)`;
+      const rawLines = content.split("\n");
+      const masked = [];
+      for (const raw of rawLines) {
+        const parsed = parseDotenvLine(raw);
+        if (!parsed) {
+          if (raw.trim() && !raw.trim().startsWith("#")) masked.push(raw.trim());
+          continue;
         }
-        return `${key}=${val}`;
-      });
+        const { key, value } = parsed;
+        if (!reveal && SECRET_KEY_RE.test(key)) masked.push(`${key}=******** (masked)`);
+        else masked.push(`${key}=${value}`);
+      }
       return `[.env file contents: ${dotenv_path}]\n` + masked.join("\n");
     } catch (err) {
       return `ERROR reading ${dotenv_path}: ${err.message}`;

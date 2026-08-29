@@ -658,4 +658,3 @@ class SubagentManager extends EventEmitter {
 }
 
 export const subagentManager = new SubagentManager();
-subagentManager.loadCustomAgents();

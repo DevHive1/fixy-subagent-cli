@@ -7,6 +7,7 @@ import { colors } from "./theme.js";
 import { getMode } from "./permissions.js";
 
 let globalMaxRounds = parseInt(process.env.FIXY_MAX_ROUNDS, 10) || 30;
+const LLM_TIMEOUT_MS = parseInt(process.env.FIXY_LLM_TIMEOUT_MS, 10) || 120000;
 
 /**
  * Get current global max tool rounds limit.
@@ -110,13 +111,24 @@ export async function runTurn({
 
   for (let round = 0; round < limit; round++) {
     onRoundStart?.();
-    const message = await chatStream({
-      model,
-      messages: history,
-      tools: TOOL_DEFS,
-      onThinking,
-      onContent,
-    });
+    const ac = new AbortController();
+    const tId = setTimeout(() => ac.abort(), LLM_TIMEOUT_MS);
+    let message;
+    try {
+      message = await chatStream({
+        model,
+        messages: history,
+        tools: TOOL_DEFS,
+        onThinking,
+        onContent,
+        signal: ac.signal,
+      });
+    } catch (e) {
+      if (e.name === "AbortError") {
+        return chalk.yellow(`\n⚠ LLM timeout after ${LLM_TIMEOUT_MS}ms (round ${round + 1}/${limit}). Try /rounds or check Ollama load.`);
+      }
+      throw e;
+    } finally { clearTimeout(tId); }
 
     history.push(message);
 

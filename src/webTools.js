@@ -1318,11 +1318,12 @@ export async function loadTester({
   let success2xx = 0;
 
   const startTime = performance.now();
-  let completed = 0;
+  let nextIdx = 0;
 
   async function worker() {
-    while (completed < totalReqs) {
-      completed++;
+    while (true) {
+      const idx = nextIdx++;
+      if (idx >= totalReqs) break;
       const reqStart = performance.now();
       try {
         const controller = new AbortController();

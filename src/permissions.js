@@ -42,7 +42,14 @@ const ALWAYS_DANGEROUS = new Set([
   "edit_file",
   "batch_edit",
   "web_download",
-  "define_agent", // mutates the persisted agent registry
+  "define_agent",
+  "patch_applier",
+  "cron_scheduler",
+  "ollama_manager",
+  "process_manager",
+  "backup_manager",
+  "mcp_manager",
+  "repair_controller",
 ]);
 
 const GIT_READ_ONLY = new Set(["status", "diff", "log", "blame"]);
@@ -57,7 +64,20 @@ export function isDangerous(toolName, args = {}) {
   if (toolName === "manage_background_tasks") {
     return ["kill", "send_input"].includes(args.action);
   }
-  return ALWAYS_DANGEROUS.has(toolName);
+  if (toolName === "manage_subagents") {
+    return args.action === "kill";
+  }
+  if (toolName === "env_manager" && args.reveal === true) return true;
+  if (toolName === "process_manager" && args.action === "kill") return true;
+  if (toolName === "termux_api") return true;
+  if (toolName === "notification_sender") return false;
+  if (toolName === "mcp_manager" && args.action === "call") return true;
+  if (toolName === "repair_controller" && args.action === "start") return true;
+  if (ALWAYS_DANGEROUS.has(toolName)) {
+    if (toolName === "ollama_manager" && ["list", "ps", "show"].includes(args.action)) return false;
+    return true;
+  }
+  return false;
 }
 
 // --- Session allowlist ------------------------------------------------------

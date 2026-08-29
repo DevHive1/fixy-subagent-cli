@@ -19,8 +19,9 @@ export const colors = {
   tagBg: chalk.bgHex("#0f172a"),
 };
 
-export const stripAnsi = (str) =>
-  String(str ?? "").replace(/\x1B\[\d+m/g, "").replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
+import { stripAnsi as utilStripAnsi } from "./utils.js";
+export const stripAnsi = utilStripAnsi;
+export const colorsFrozen = Object.freeze(colors);
 
 /**
  * Draw a clean border box with flexible headers and footers.
