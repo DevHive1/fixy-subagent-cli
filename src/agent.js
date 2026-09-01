@@ -1,13 +1,21 @@
 import chalk from "chalk";
 import { chatStream } from "./llm.js";
-import { TOOL_DEFS, runTool } from "./tools.js";
+import { TOOL_DEFS, runTool, getMergedToolDefs } from "./tools.js";
 import { taskManager } from "./taskManager.js";
 import { subagentManager } from "./subagentManager.js";
 import { colors } from "./theme.js";
 import { getMode } from "./permissions.js";
+import { loadRules, formatRulesForPrompt } from "./rules.js";
+import { findRelevantSkills, formatSkillsForPrompt, loadAllSkills } from "./skills.js";
+import { mcpManager } from "./mcp.js";
 
 let globalMaxRounds = parseInt(process.env.FIXY_MAX_ROUNDS, 10) || 30;
 const LLM_TIMEOUT_MS = parseInt(process.env.FIXY_LLM_TIMEOUT_MS, 10) || 120000;
+
+// Cached rules & skills (loaded once per session, refreshed on /clear)
+let cachedRules = null;
+let cachedSkills = null;
+let mcpInitialized = false;
 
 /**
  * Get current global max tool rounds limit.
@@ -29,8 +37,56 @@ export function setMaxRounds(n) {
   throw new Error(`Invalid max rounds number: "${n}"`);
 }
 
+/**
+ * Initialize rules, skills, and MCP servers once per session.
+ * Called lazily on first agent turn. Safe to call multiple times.
+ */
+export async function initializeAgentContext() {
+  // Load project rules (FIXY.md, .cursorrules, CLAUDE.md, etc.)
+  if (!cachedRules) {
+    cachedRules = await loadRules();
+  }
+
+  // Load installed skills
+  if (!cachedSkills) {
+    cachedSkills = await loadAllSkills();
+  }
+
+  // Initialize MCP servers (connect once)
+  if (!mcpInitialized) {
+    mcpInitialized = true;
+    try {
+      await mcpManager.initialize();
+    } catch {}
+  }
+
+  return { rules: cachedRules, skills: cachedSkills };
+}
+
+/**
+ * Reset cached context (e.g. on /clear).
+ */
+export function resetAgentContext() {
+  cachedRules = null;
+  cachedSkills = null;
+}
+
+/**
+ * Get the loaded rules (for display in UI).
+ */
+export function getLoadedRules() {
+  return cachedRules || [];
+}
+
+/**
+ * Get the loaded skills (for display in UI).
+ */
+export function getLoadedSkills() {
+  return cachedSkills || [];
+}
+
 const SYSTEM_PROMPT = `You are Fixy (Edition 2.0), an advanced autonomous multi-agent engineering system running directly in the user's terminal.
-You have access to an extensive suite of 42 precision tools, 12 specialized sub-agents, a background process engine, an autonomous Agent Creator, dynamic rounds limit controls, and highest-standards construction capabilities.
+You have access to an extensive suite of precision tools, 12 specialized sub-agents, a background process engine, an autonomous Agent Creator, dynamic rounds limit controls, a Project Rules Engine, a Skills System, and Model Context Protocol (MCP) integration.
 
 Core Capabilities:
 1. Full-Stack Web, Frontend & Backend Engineering:
@@ -63,14 +119,57 @@ Core Capabilities:
    - Precision Edits: Use edit_file for surgical unique replacements and batch_edit for multi-file refactoring.
    - Background Shell Tasks: Use run_command with background=true and manage_background_tasks.
 
+7. Project Rules Engine:
+   - Fixy auto-loads project rules from FIXY.md, .fixyrules, .cursorrules, CLAUDE.md, and ~/.fixy/rules.md.
+   - Use read_project_rules to inspect which rules are active.
+   - Always follow project rules when they are loaded.
+
+8. Skills System:
+   - Skills are specialized playbooks in ~/.fixy/skills/ or .fixy/skills/ with SKILL.md files.
+   - Use list_skills to see available skills and use_skill to read a skill's playbook.
+   - Skills contain domain-specific guidelines, patterns, and best practices.
+
+9. MCP (Model Context Protocol) Integration:
+   - Fixy connects to external MCP servers configured in ~/.fixy/mcp.json or .fixy/mcp.json.
+   - MCP tools are auto-discovered and appear as mcp__<server>__<tool> in the tool list.
+   - Use list_mcp_servers to inspect connected servers and their tools.
+
 Rules:
 - Never guess file contents or command outputs. Always verify with tools.
 - Reply in the same language the user speaks (Arabic or English).
-- Be concise, direct, and provide concrete summaries with code locations.`;
+- Be concise, direct, and provide concrete summaries with code locations.
+- ALWAYS follow project rules (FIXY.md, .cursorrules, etc.) when they are loaded.`;
+
+/**
+ * Build the full system prompt with dynamic rules, skills, and MCP context.
+ */
+function buildSystemPrompt(rules, skills, mcpServers) {
+  let prompt = SYSTEM_PROMPT;
+
+  // Inject project rules
+  if (rules && rules.length > 0) {
+    prompt += formatRulesForPrompt(rules);
+  }
+
+  // Inject activated skills
+  if (skills && skills.length > 0) {
+    prompt += formatSkillsForPrompt(skills);
+  }
+
+  // Inject MCP server context
+  if (mcpServers && mcpServers.length > 0) {
+    prompt += "\n\n## CONNECTED MCP SERVERS\n";
+    for (const s of mcpServers) {
+      prompt += `- **${s.name}** (${s.status}): ${s.toolsCount} tools [${s.tools.join(", ")}]\n`;
+    }
+  }
+
+  return prompt;
+}
 
 /**
  * Run one full agent turn with background notification draining, tool-calling loop,
- * and streaming output.
+ * rules/skills injection, MCP tool merging, and streaming output.
  */
 export async function runTurn({
   model,
@@ -84,6 +183,9 @@ export async function runTurn({
   onRoundStart,
   onSubagentEvent,
 }) {
+  // Initialize context (rules, skills, MCP) on first call
+  const { rules, skills } = await initializeAgentContext();
+
   // Inject any background task or sub-agent notifications that occurred
   const pendingTaskNotifs = taskManager.drainNotifications();
   const pendingSubagentNotifs = subagentManager.drainNotifications();
@@ -101,11 +203,18 @@ export async function runTurn({
       : "[MODE: CONFIRM — dangerous tool calls require user y/n approval; sub-agents cannot perform write/exec actions in this mode]";
   enrichedMessage = `${modeLine}\n\n${enrichedMessage}`;
 
+  // Build dynamic system prompt with rules + skills + MCP
   if (history.length === 0) {
-    history.push({ role: "system", content: SYSTEM_PROMPT });
+    const mcpServers = mcpManager.getStatus();
+    const relevantSkills = await findRelevantSkills(userMessage);
+    const systemPrompt = buildSystemPrompt(rules, relevantSkills, mcpServers);
+    history.push({ role: "system", content: systemPrompt });
   }
 
   history.push({ role: "user", content: enrichedMessage });
+
+  // Merge built-in tools + MCP dynamic tools
+  const mergedTools = getMergedToolDefs();
 
   const limit = maxRounds || globalMaxRounds;
 
@@ -118,7 +227,7 @@ export async function runTurn({
       message = await chatStream({
         model,
         messages: history,
-        tools: TOOL_DEFS,
+        tools: mergedTools,
         onThinking,
         onContent,
         signal: ac.signal,

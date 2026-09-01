@@ -16,7 +16,10 @@ import {
   loadConfig,
   saveConfig,
 } from "../src/config.js";
-import { runTurn, getMaxRounds, setMaxRounds } from "../src/agent.js";
+import { runTurn, getMaxRounds, setMaxRounds, initializeAgentContext, resetAgentContext, getLoadedRules, getLoadedSkills } from "../src/agent.js";
+import { loadRules, getRulesSummary } from "../src/rules.js";
+import { loadAllSkills, saveSkill } from "../src/skills.js";
+import { mcpManager } from "../src/mcp.js";
 import { LineReader } from "../src/input.js";
 import { taskManager } from "../src/taskManager.js";
 import { subagentManager } from "../src/subagentManager.js";
@@ -852,6 +855,76 @@ async function handleSlashCommand(trimmed) {
   if (trimmed === "/diagnostics" || trimmed === "/info") {
     const diag = await runTool("system_diagnostics", {});
     console.log("\n" + renderBox(diag.split("\n"), { title: "SYSTEM DIAGNOSTICS", borderColor: colors.accent }) + "\n");
+    return true;
+  }
+
+  // ── Rules, Skills, MCP Commands ──────────────────────────────────
+  if (trimmed === "/rules") {
+    const rules = getLoadedRules();
+    if (!rules.length) {
+      console.log(colors.dim("\n  No active rules found. Create a FIXY.md, .fixyrules, or .cursorrules in your project.\n"));
+    } else {
+      const lines = [`Active Rules (${rules.length}):`];
+      for (const r of rules) {
+        lines.push(`  ${colors.secondary(`▸ ${r.name}`)} ${colors.dim(`(${r.source})`)} — ${r.content.length} chars`);
+      }
+      console.log("\n" + renderBox(lines, { title: "PROJECT RULES", borderColor: colors.accent }) + "\n");
+    }
+    return true;
+  }
+
+  if (trimmed === "/skills") {
+    const skills = getLoadedSkills();
+    if (!skills.length) {
+      console.log(colors.dim("\n  No skills installed. Create SKILL.md files in ~/.fixy/skills/ or .fixy/skills/.\n"));
+    } else {
+      const lines = [`Installed Skills (${skills.length}):`];
+      for (const s of skills) {
+        lines.push(`  ${colors.secondary(`▸ ${s.name}`)} ${colors.dim(`(${s.scope})`)} — ${s.description || "No description"}`);
+        if (s.triggers?.length) lines.push(`    ${colors.dim(`Triggers: ${s.triggers.join(", ")}`)}`);
+      }
+      console.log("\n" + renderBox(lines, { title: "INSTALLED SKILLS", borderColor: colors.accent }) + "\n");
+    }
+    return true;
+  }
+
+  if (trimmed.startsWith("/skill ")) {
+    const skillName = trimmed.slice(7).trim();
+    const skills = getLoadedSkills();
+    const skill = skills.find((s) => s.name.toLowerCase() === skillName.toLowerCase());
+    if (!skill) {
+      console.log(colors.danger(`  Skill "${skillName}" not found. Use /skills to list installed skills.`));
+    } else {
+      const lines = [
+        `Name: ${skill.name}`,
+        `Scope: ${skill.scope}`,
+        `Description: ${skill.description || "—"}`,
+        ...(skill.triggers?.length ? [`Triggers: ${skill.triggers.join(", ")}`] : []),
+        ...(skill.tools?.length ? [`Tools: ${skill.tools.join(", ")}`] : []),
+        "",
+        "─── Playbook ───",
+        ...skill.body.split("\n"),
+      ];
+      console.log("\n" + renderBox(lines, { title: `SKILL: ${skill.name.toUpperCase()}`, borderColor: colors.secondary }) + "\n");
+    }
+    return true;
+  }
+
+  if (trimmed === "/mcp") {
+    const status = mcpManager.getStatus();
+    if (!status.length) {
+      console.log(colors.dim("\n  No MCP servers configured. Add them in ~/.fixy/mcp.json or .fixy/mcp.json.\n"));
+    } else {
+      const lines = [`MCP Servers (${status.length}):`];
+      for (const s of status) {
+        const icon = s.status === "connected" ? "🟢" : s.status === "error" ? "🔴" : "🟡";
+        lines.push(`  ${icon} ${colors.secondary(s.name)} — ${s.status} (${s.toolsCount} tools)`);
+        if (s.tools?.length) {
+          for (const t of s.tools) lines.push(`    ${colors.dim(`• ${t}`)}`);
+        }
+      }
+      console.log("\n" + renderBox(lines, { title: "MCP SERVERS", borderColor: colors.accent }) + "\n");
+    }
     return true;
   }
 

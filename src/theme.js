@@ -288,6 +288,12 @@ export function renderCommandMatrix(currentRounds = 30) {
     `  ${colors.accent.bold("/logs <task-id>")}           Inspect live logs for a background task`,
     `  ${colors.accent.bold("/kill <task-id>")}           Terminate a running background task or subagent`,
     ``,
+    `${colors.highlight.bold("🛠 EXTENSIONS & RULES")}`,
+    `  ${colors.accent.bold("/rules")}                    Inspect active project & global rules`,
+    `  ${colors.accent.bold("/skills")}                   List installed domain skills & playbooks`,
+    `  ${colors.accent.bold("/skill <name>")}             Inspect specific skill guidelines & playbook`,
+    `  ${colors.accent.bold("/mcp")}                      View connected Model Context Protocol servers`,
+    ``,
     `${colors.success.bold("📊 SYSTEM & DIAGNOSTICS")}`,
     `  ${colors.accent.bold("/diagnostics, /info")}       Inspect CPU, memory, uptime, and host stats`,
   ];

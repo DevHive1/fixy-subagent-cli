@@ -33,6 +33,9 @@ import {
   webRss,
   webSitemap,
 } from "./internetTools.js";
+import { loadRules } from "./rules.js";
+import { loadAllSkills } from "./skills.js";
+import { mcpManager } from "./mcp.js";
 
 import { truncate, tokenizeArgs as utilTokenizeArgs, globToRegex, parseDotenvLine, truncateMiddle } from "./utils.js";
 import { MAX_OUTPUT as CONFIG_MAX } from "./config.js";
@@ -932,6 +935,57 @@ export const TOOL_DEFS = [
       },
     },
   },
+  // 32. read_project_rules (NEW)
+  {
+    type: "function",
+    function: {
+      name: "read_project_rules",
+      description: "Inspect active project and global rules/conventions (from FIXY.md, .cursorrules, CLAUDE.md, etc.).",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
+  // 33. list_skills (NEW)
+  {
+    type: "function",
+    function: {
+      name: "list_skills",
+      description: "List all installed domain-specific skills and playbooks from ~/.fixy/skills/ or .fixy/skills/.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
+  // 34. use_skill (NEW)
+  {
+    type: "function",
+    function: {
+      name: "use_skill",
+      description: "Read detailed guidelines, instructions, and best practices from a specific skill playbook.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Name of the skill to inspect/apply." },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  // 35. list_mcp_servers (NEW)
+  {
+    type: "function",
+    function: {
+      name: "list_mcp_servers",
+      description: "List all configured Model Context Protocol (MCP) servers, connection status, and discovered dynamic tools.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+  },
 ];
 
 // --- Tool Implementations --------------------------------------------------
@@ -1756,15 +1810,55 @@ const HANDLERS = {
   hosting_deployer: hostingDeployer,
   port_scanner: portScanner,
   project_auditor: projectAuditor,
+  read_project_rules: async () => {
+    const rules = await loadRules();
+    if (!rules.length) return "No active project or global rules found.";
+    return rules.map((r) => `[Source: ${r.name} (${r.source})]\n${r.content}`).join("\n\n---\n\n");
+  },
+  list_skills: async () => {
+    const skills = await loadAllSkills();
+    if (!skills.length) return "No installed skills found in ~/.fixy/skills/ or .fixy/skills/.";
+    return JSON.stringify(skills.map((s) => ({
+      name: s.name,
+      description: s.description,
+      triggers: s.triggers,
+      tools: s.tools,
+      scope: s.scope,
+    })), null, 2);
+  },
+  use_skill: async ({ name }) => {
+    if (!name) return "ERROR: 'name' is required for use_skill.";
+    const allSkills = await loadAllSkills();
+    const skill = allSkills.find((s) => s.name.toLowerCase() === name.toLowerCase());
+    if (!skill) return `Skill "${name}" not found.`;
+    return `[Skill Playbook: ${skill.name} (${skill.scope})]\n${skill.body}`;
+  },
+  list_mcp_servers: async () => {
+    const status = mcpManager.getStatus();
+    if (!status.length) return "No MCP servers configured in ~/.fixy/mcp.json or .fixy/mcp.json.";
+    return JSON.stringify(status, null, 2);
+  },
 };
 
 /**
  * Execute a tool call by name with the given arguments.
- * `interactive: true` marks calls originating from the main conversation,
- * which may trigger y/n approval prompts in confirm mode. Sub-agent and
- * background contexts stay non-interactive (dangerous calls are denied).
+ * Supports built-in tools + dynamic MCP tools.
  */
 export async function runTool(name, args, { interactive = false } = {}) {
+  // 1. Check dynamic MCP tools
+  if (mcpManager.isMCPTool(name)) {
+    try {
+      const approval = await requestApproval(name, args || {}, { interactive });
+      if (!approval.allowed) {
+        return `ERROR: Permission denied for tool "${name}": ${approval.reason}`;
+      }
+      return await mcpManager.executeTool(name, args || {});
+    } catch (err) {
+      return `ERROR (MCP): ${err.message}`;
+    }
+  }
+
+  // 2. Standard built-in tools
   const handler = HANDLERS[name];
   if (!handler) return `ERROR: unknown tool "${name}"`;
   try {
@@ -1776,6 +1870,13 @@ export async function runTool(name, args, { interactive = false } = {}) {
   } catch (err) {
     return `ERROR: ${err.message}`;
   }
+}
+
+/**
+ * Returns merged tool definitions (built-in + connected MCP tools).
+ */
+export function getMergedToolDefs() {
+  return [...TOOL_DEFS, ...mcpManager.getToolDefinitions()];
 }
 
 // --- Testable internals ------------------------------------------------------
