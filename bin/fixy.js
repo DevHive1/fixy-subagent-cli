@@ -17,7 +17,7 @@ import {
   saveConfig,
 } from "../src/config.js";
 import { runTurn, getMaxRounds, setMaxRounds, initializeAgentContext, resetAgentContext, getLoadedRules, getLoadedSkills } from "../src/agent.js";
-import { loadRules, getRulesSummary } from "../src/rules.js";
+import { loadRules, getRulesSummary, generateProjectRules } from "../src/rules.js";
 import { loadAllSkills, saveSkill } from "../src/skills.js";
 import { mcpManager } from "../src/mcp.js";
 import { LineReader } from "../src/input.js";
@@ -859,10 +859,24 @@ async function handleSlashCommand(trimmed) {
   }
 
   // ── Rules, Skills, MCP Commands ──────────────────────────────────
-  if (trimmed === "/rules") {
+  if (trimmed === "/rules" || trimmed.startsWith("/rules ")) {
+    const sub = trimmed.slice(6).trim().toLowerCase();
+    if (sub === "init" || sub === "generate") {
+      try {
+        const generated = await generateProjectRules({ format: "FIXY.md" });
+        resetAgentContext();
+        await initializeAgentContext();
+        console.log(colors.success(`\n  ✔ Generated standard project rules in: ${colors.boldWhite(generated.filename)}`));
+        console.log(colors.dim(`  Detected stack: ${generated.stack.language} (${generated.stack.framework}) • Package manager: ${generated.stack.packageManager}\n`));
+      } catch (err) {
+        console.log(colors.danger(`\n  ✖ Failed to generate project rules: ${err.message}\n`));
+      }
+      return true;
+    }
+
     const rules = getLoadedRules();
     if (!rules.length) {
-      console.log(colors.dim("\n  No active rules found. Create a FIXY.md, .fixyrules, or .cursorrules in your project.\n"));
+      console.log(colors.dim("\n  No active rules found. Use ") + colors.accent("/rules init") + colors.dim(" to auto-generate a standard FIXY.md file for this project.\n"));
     } else {
       const lines = [`Active Rules (${rules.length}):`];
       for (const r of rules) {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { loadRules, formatRulesForPrompt, getRulesSummary } from "../src/rules.js";
+import { loadRules, formatRulesForPrompt, getRulesSummary, detectProjectStack, generateProjectRules } from "../src/rules.js";
 
 test("Project Rules Engine", async (t) => {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "fixy-rules-test-"));
@@ -52,5 +52,35 @@ test("Project Rules Engine", async (t) => {
     ];
     const summary = getRulesSummary(mockRules);
     assert.ok(summary.includes("FIXY.md"));
+  });
+
+  await t.test("detectProjectStack detects Node, TypeScript, Next.js, Tailwind", async () => {
+    const appDir = path.join(tmpDir, "sample-app");
+    await fs.mkdir(appDir, { recursive: true });
+    await fs.writeFile(
+      path.join(appDir, "package.json"),
+      JSON.stringify({
+        dependencies: { next: "15.0.0", react: "19.0.0", tailwindcss: "4.0.0" },
+        devDependencies: { vitest: "2.0.0" },
+      })
+    );
+    await fs.writeFile(path.join(appDir, "tsconfig.json"), "{}");
+
+    const stack = await detectProjectStack(appDir);
+    assert.strictEqual(stack.runtime, "node");
+    assert.strictEqual(stack.framework, "nextjs");
+    assert.strictEqual(stack.language, "typescript");
+    assert.strictEqual(stack.styling, "tailwind");
+    assert.strictEqual(stack.testing, "vitest");
+  });
+
+  await t.test("generateProjectRules generates hardened FIXY.md file", async () => {
+    const appDir = path.join(tmpDir, "sample-app");
+    const generated = await generateProjectRules({ format: "FIXY.md" }, appDir);
+    assert.strictEqual(generated.filename, "FIXY.md");
+    assert.ok(generated.content.includes("NEXTJS"));
+    assert.ok(generated.content.includes("React Server Components"));
+    const fileOnDisk = await fs.readFile(generated.path, "utf8");
+    assert.strictEqual(fileOnDisk, generated.content);
   });
 });
