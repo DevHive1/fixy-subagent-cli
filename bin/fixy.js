@@ -860,14 +860,23 @@ async function handleSlashCommand(trimmed) {
 
   // ── Rules, Skills, MCP Commands ──────────────────────────────────
   if (trimmed === "/rules" || trimmed.startsWith("/rules ")) {
-    const sub = trimmed.slice(6).trim().toLowerCase();
-    if (sub === "init" || sub === "generate") {
+    const rawArg = trimmed.slice(6).trim();
+    const sub = rawArg.toLowerCase();
+    if (sub === "init" || sub.startsWith("init ") || sub === "generate" || sub.startsWith("generate ")) {
+      const customNotes = rawArg.replace(/^(init|generate)\s*/i, "").trim();
       try {
-        const generated = await generateProjectRules({ format: "FIXY.md" });
+        console.log(colors.dim("\n  🔍 Inspecting workspace files, structure, and configs..."));
+        const generated = await generateProjectRules({
+          model,
+          format: "FIXY.md",
+          customNotes,
+          onStatus: (msg) => console.log(colors.dim(`  🧠 ${msg}`)),
+        });
         resetAgentContext();
         await initializeAgentContext();
-        console.log(colors.success(`\n  ✔ Generated standard project rules in: ${colors.boldWhite(generated.filename)}`));
-        console.log(colors.dim(`  Detected stack: ${generated.stack.language} (${generated.stack.framework}) • Package manager: ${generated.stack.packageManager}\n`));
+        const genBadge = generated.isLLMGenerated ? colors.success("[AI Synthesized]") : colors.accent("[Codebase Inspected]");
+        console.log(colors.success(`\n  ✔ Authored project development rules in: ${colors.boldWhite(generated.filename)} ${genBadge}`));
+        console.log(colors.dim(`  Scanned ${generated.filesCount} workspace entries • Discovered ${generated.configsCount} config manifests • Size: ${generated.content.length} bytes\n`));
       } catch (err) {
         console.log(colors.danger(`\n  ✖ Failed to generate project rules: ${err.message}\n`));
       }

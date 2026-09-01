@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { chat, getActiveModel } from "./llm.js";
 
 const GLOBAL_RULES_FILE = path.join(os.homedir(), ".fixy", "rules.md");
 
@@ -12,6 +13,57 @@ const RULE_CANDIDATE_FILES = [
   ".cursorrules",
   "CLAUDE.md",
   "claude.md",
+];
+
+const IGNORED_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  "dist",
+  "build",
+  "target",
+  "vendor",
+  ".cache",
+  "coverage",
+  ".turbo",
+  ".vercel",
+  "__pycache__",
+  ".pytest_cache",
+  ".venv",
+  "venv",
+]);
+
+const KEY_CONFIG_FILES = [
+  "package.json",
+  "tsconfig.json",
+  "jsconfig.json",
+  "pyproject.toml",
+  "requirements.txt",
+  "Pipfile",
+  "setup.py",
+  "Cargo.toml",
+  "go.mod",
+  "composer.json",
+  "Gemfile",
+  "pom.xml",
+  "build.gradle",
+  "docker-compose.yml",
+  "docker-compose.yaml",
+  "Dockerfile",
+  ".env.example",
+  "Makefile",
+  "biome.json",
+  "eslint.config.js",
+  "eslint.config.mjs",
+  "vite.config.ts",
+  "vite.config.js",
+  "next.config.js",
+  "next.config.mjs",
+  "next.config.ts",
+  "prisma/schema.prisma",
+  "drizzle.config.ts",
 ];
 
 /**
@@ -108,173 +160,157 @@ export function getRulesSummary(rules) {
 }
 
 /**
- * Autonomously inspects a project directory and detects framework, runtime,
- * package manager, testing tools, styling, and database ORMs.
+ * Deeply scans the project workspace to collect factual context without hardcoded assumptions.
  */
-export async function detectProjectStack(cwd = process.cwd()) {
-  const stack = {
-    runtime: "unknown",
-    framework: "vanilla",
-    language: "javascript",
-    packageManager: "npm",
-    database: "none",
-    testing: "none",
-    styling: "none",
-    isFresh: true,
-  };
+export async function collectCodebaseContext(cwd = process.cwd(), maxDepth = 2) {
+  const tree = [];
+  const configs = {};
 
-  // 1. Check Node / JS ecosystem
-  try {
-    const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8");
-    const pkg = JSON.parse(pkgRaw);
-    stack.runtime = "node";
-    stack.isFresh = false;
-
-    const allDeps = {
-      ...(pkg.dependencies || {}),
-      ...(pkg.devDependencies || {}),
-    };
-
-    // Framework detection
-    if (allDeps.next) stack.framework = "nextjs";
-    else if (allDeps["@remix-run/react"]) stack.framework = "remix";
-    else if (allDeps.nuxt || allDeps.vue) stack.framework = "vue";
-    else if (allDeps["@sveltejs/kit"] || allDeps.svelte) stack.framework = "svelte";
-    else if (allDeps.react) stack.framework = "react";
-    else if (allDeps.express) stack.framework = "express";
-    else if (allDeps.fastify) stack.framework = "fastify";
-    else if (allDeps["@nestjs/core"]) stack.framework = "nestjs";
-
-    // Testing
-    if (allDeps.vitest) stack.testing = "vitest";
-    else if (allDeps.jest) stack.testing = "jest";
-    else if (allDeps.playwright || allDeps["@playwright/test"]) stack.testing = "playwright";
-
-    // Styling
-    if (allDeps.tailwindcss) stack.styling = "tailwind";
-
-    // Database / ORM
-    if (allDeps["@prisma/client"] || allDeps.prisma) stack.database = "prisma";
-    else if (allDeps["drizzle-orm"]) stack.database = "drizzle";
-    else if (allDeps.mongoose) stack.database = "mongoose";
-    else if (allDeps.pg || allDeps.mysql2 || allDeps["better-sqlite3"] || allDeps.sqlite3) stack.database = "sql";
-  } catch {}
-
-  // 2. Language check (TypeScript)
-  try {
-    await fs.access(path.join(cwd, "tsconfig.json"));
-    stack.language = "typescript";
-    stack.isFresh = false;
-  } catch {}
-
-  // 3. Package Manager check
-  try {
-    await fs.access(path.join(cwd, "pnpm-lock.yaml"));
-    stack.packageManager = "pnpm";
-  } catch {
+  async function walk(dir, depth) {
+    if (depth > maxDepth) return;
     try {
-      await fs.access(path.join(cwd, "yarn.lock"));
-      stack.packageManager = "yarn";
-    } catch {
-      try {
-        await fs.access(path.join(cwd, "bun.lockb"));
-        stack.packageManager = "bun";
-      } catch {}
-    }
-  }
-
-  // 4. Python ecosystem
-  try {
-    const pyproject = await fs.readFile(path.join(cwd, "pyproject.toml"), "utf-8");
-    stack.runtime = "python";
-    stack.language = "python";
-    stack.isFresh = false;
-    if (pyproject.includes("fastapi")) stack.framework = "fastapi";
-    else if (pyproject.includes("django")) stack.framework = "django";
-    else if (pyproject.includes("flask")) stack.framework = "flask";
-    if (pyproject.includes("pytest")) stack.testing = "pytest";
-    if (pyproject.includes("sqlalchemy")) stack.database = "sqlalchemy";
-  } catch {
-    try {
-      const reqs = await fs.readFile(path.join(cwd, "requirements.txt"), "utf-8");
-      stack.runtime = "python";
-      stack.language = "python";
-      stack.isFresh = false;
-      if (reqs.includes("fastapi")) stack.framework = "fastapi";
-      else if (reqs.includes("django")) stack.framework = "django";
-      else if (reqs.includes("flask")) stack.framework = "flask";
-      if (reqs.includes("pytest")) stack.testing = "pytest";
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (IGNORED_DIRS.has(entry.name)) continue;
+        const relPath = path.relative(cwd, path.join(dir, entry.name));
+        if (entry.isDirectory()) {
+          tree.push(`[DIR]  ${relPath}/`);
+          await walk(path.join(dir, entry.name), depth + 1);
+        } else {
+          tree.push(`[FILE] ${relPath}`);
+        }
+      }
     } catch {}
   }
 
-  // 5. Rust / Go ecosystem
-  try {
-    await fs.access(path.join(cwd, "Cargo.toml"));
-    stack.runtime = "rust";
-    stack.language = "rust";
-    stack.isFresh = false;
-  } catch {}
+  await walk(cwd, 0);
 
-  try {
-    await fs.access(path.join(cwd, "go.mod"));
-    stack.runtime = "go";
-    stack.language = "go";
-    stack.isFresh = false;
-  } catch {}
+  // Read key configuration files
+  for (const relConfig of KEY_CONFIG_FILES) {
+    const fullConfig = path.resolve(cwd, relConfig);
+    try {
+      const stat = await fs.stat(fullConfig);
+      if (stat.isFile() && stat.size < 30000) {
+        const text = await fs.readFile(fullConfig, "utf-8");
+        configs[relConfig] = text.trim();
+      }
+    } catch {}
+  }
 
-  return stack;
+  return {
+    tree: tree.slice(0, 80),
+    configs,
+    totalFilesDiscovered: tree.length,
+  };
 }
 
 /**
- * Autonomously generate a production-ready FIXY.md rule file based on detected or specified stack.
+ * Dynamically authors a bespoke, highly accurate FIXY.md rule file using the LLM agent,
+ * inspecting actual directory layout, package manifests, scripts, and configs.
  */
-export async function generateProjectRules({ format = "FIXY.md", customNotes = "" } = {}, cwd = process.cwd()) {
-  const stack = await detectProjectStack(cwd);
+export async function generateProjectRules(
+  { model, format = "FIXY.md", customNotes = "", onStatus } = {},
+  cwd = process.cwd()
+) {
+  onStatus?.("Inspecting workspace file structure and configuration manifests...");
+  const context = await collectCodebaseContext(cwd);
 
-  const lines = [
-    `# Project Development Rules & Engineering Standards`,
-    ``,
-    `> Auto-generated by Fixy for ${stack.language.toUpperCase()} / ${stack.framework.toUpperCase()} environment.`,
-    ``,
-    `## 1. Stack & Runtime Environment`,
-    `- **Language**: ${stack.language} (strict typing enabled)`,
-    `- **Runtime / Framework**: ${stack.framework} (${stack.runtime})`,
-    `- **Package Manager**: ${stack.packageManager}`,
-    `- **Testing Framework**: ${stack.testing !== "none" ? stack.testing : "Vitest/Jest standard"}`,
-    `- **Database / ORM**: ${stack.database !== "none" ? stack.database : "Modular data layer"}`,
-    ``,
-    `## 2. Core Architectural Principles`,
-    `- **Single Responsibility**: Keep components, functions, and modules isolated and focused.`,
-    `- **Explicit Error Handling**: Always wrap I/O, database queries, and network requests with structured try/catch or Result types.`,
-    `- **Strict Typing**: Avoid \`any\` or loosely typed interfaces. Prefer explicit domain types and schemas.`,
-    `- **Idempotency & Reversibility**: All migrations and database schema modifications MUST support UP and DOWN operations.`,
-    ``,
-    `## 3. Code Conventions & Quality Gates`,
-    `- Write clean, readable code with descriptive variable and function names.`,
-    `- Keep business logic out of presentation components and route handlers.`,
-    `- Run tests before proposing or finalizing major refactors.`,
-  ];
+  const activeModel = model || getActiveModel();
+  let generatedContent = "";
+  let isLLMGenerated = false;
 
-  if (stack.styling === "tailwind") {
-    lines.push(`- **Styling**: Use utility-first Tailwind CSS with \`clsx\` or \`tailwind-merge\` for dynamic class names.`);
+  if (activeModel) {
+    onStatus?.(`Synthesizing tailored project rules with model ${activeModel}...`);
+    try {
+      const configDumps = Object.entries(context.configs)
+        .map(([filename, content]) => `--- Config File: ${filename} ---\n${content}`)
+        .join("\n\n");
+
+      const prompt = `You are a Principal Software Architect. Your job is to inspect this real codebase and author an authoritative, highly professional, concrete project development rules document (FIXY.md).
+
+Real Project File Layout:
+${context.tree.join("\n")}
+
+Discovered Configuration Manifests:
+${configDumps || "(No standard configuration manifests found in root)"}
+
+${customNotes ? `User Custom Instructions / Preferences:\n${customNotes}\n` : ""}
+
+Instructions:
+1. Ground every rule strictly in what is ACTUALLY present in this repository.
+2. If package.json or config files are present, extract the EXACT scripts (e.g. dev, build, test, lint), package manager, and dependencies.
+3. Define concrete architectural conventions, directory responsibilities, typing guidelines, error handling policies, and state/data management standards.
+4. If testing tools exist (Vitest, Jest, Pytest, Playwright), document how to run and write tests.
+5. If Docker or CI/CD files exist, document container and deployment policies.
+6. Do NOT include generic fluff or placeholder text. Keep it concise, actionable, and authoritative.
+7. Return ONLY the markdown document contents starting with a top-level # title.`;
+
+      const response = await chat({
+        model: activeModel,
+        messages: [
+          { role: "system", content: "You are an expert AI software architect who writes precise, realistic, project-specific engineering rules." },
+          { role: "user", content: prompt },
+        ],
+      });
+
+      const raw = response?.content || "";
+      generatedContent = raw.replace(/^```(?:markdown)?\r?\n([\s\S]*?)\r?\n```$/i, "$1").trim();
+      if (generatedContent.length > 50) {
+        isLLMGenerated = true;
+      }
+    } catch (err) {
+      // Fallback if LLM unavailable
+    }
   }
 
-  if (stack.framework === "nextjs") {
-    lines.push(`- **Next.js App Router**: Prefer React Server Components (RSC) by default. Use \`'use client'\` only for interactive components.`);
+  // Fallback factual builder (no assumptions, purely reporting verified configs)
+  if (!generatedContent) {
+    const lines = [
+      `# Project Development Rules & Engineering Standards`,
+      ``,
+      `> Workspace initialized on ${new Date().toISOString().split("T")[0]}.`,
+      ``,
+      `## 1. Discovered Project Files & Structure`,
+    ];
+
+    if (context.configs["package.json"]) {
+      try {
+        const pkg = JSON.parse(context.configs["package.json"]);
+        lines.push(`- **Project Name**: \`${pkg.name || "workspace"}\` (v${pkg.version || "1.0.0"})`);
+        if (pkg.scripts && Object.keys(pkg.scripts).length > 0) {
+          lines.push(`- **Available Scripts**:`);
+          for (const [k, v] of Object.entries(pkg.scripts)) {
+            lines.push(`  - \`${k}\`: \`${v}\``);
+          }
+        }
+      } catch {}
+    }
+
+    lines.push(
+      ``,
+      `## 2. Core Architectural Principles`,
+      `- **Type Safety & Strict Validation**: Validate all runtime inputs and adhere strictly to language types.`,
+      `- **Explicit Error Handling**: Always handle errors explicitly in asynchronous I/O and network operations.`,
+      `- **Idempotency & Reversibility**: All migrations and schema modifications MUST support UP and DOWN operations.`,
+      `- **Atomic & Verified Changes**: Verify changes with tests or diagnostics before concluding tasks.`
+    );
+
+    if (customNotes) {
+      lines.push(``, `## 3. Custom Project Requirements`, customNotes);
+    }
+
+    generatedContent = lines.join("\n") + "\n";
   }
 
-  if (customNotes) {
-    lines.push(``, `## 4. Custom Project Requirements`, customNotes);
-  }
-
-  const content = lines.join("\n") + "\n";
   const targetPath = path.resolve(cwd, format);
-  await fs.writeFile(targetPath, content, "utf-8");
+  await fs.writeFile(targetPath, generatedContent, "utf-8");
 
   return {
-    path: targetPath,
     filename: format,
-    stack,
-    content,
+    path: targetPath,
+    content: generatedContent,
+    isLLMGenerated,
+    configsCount: Object.keys(context.configs).length,
+    filesCount: context.totalFilesDiscovered,
   };
 }
