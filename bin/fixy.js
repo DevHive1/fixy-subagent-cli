@@ -28,7 +28,7 @@ import {
   setConfirmHandler,
   isDangerous,
 } from "../src/permissions.js";
-import { saveSession, loadSession, clearSession, generateSessionId } from "../src/persistence.js";
+import { saveSession, loadSession, clearSession, listSessions, generateSessionId } from "../src/persistence.js";
 import { clearSessionMemory, exportSessionMemory, importSessionMemory, runTool } from "../src/tools.js";
 import {
   colors,
@@ -50,6 +50,7 @@ function parseCliArgs(argv) {
     prompt: null,
     json: false,
     cont: false,
+    listSessions: false,
     model: process.env.FIXY_MODEL || process.env.OPENROUTER_MODEL || null,
     provider: process.env.FIXY_PROVIDER || null,
     openrouterKey: null,
@@ -76,6 +77,10 @@ function parseCliArgs(argv) {
         case "-c":
         case "--continue":
           opts.cont = true;
+          break;
+        case "-s":
+        case "--sessions":
+          opts.listSessions = true;
           break;
         case "-m":
         case "--model":
@@ -120,7 +125,9 @@ function parseCliArgs(argv) {
           process.exit(2);
         }
     } else {
-      if (!opts.sessionId) {
+      if (a === "sessions" || a === "list-sessions") {
+        opts.listSessions = true;
+      } else if (!opts.sessionId) {
         opts.sessionId = a;
       } else {
         console.error(`error: unexpected positional argument "${a}"`);
@@ -137,15 +144,18 @@ ${colors.primary.bold("fixy")} — autonomous CLI coding agent (Ollama & OpenRou
 
 Usage:
   fixy                              Start interactive REPL
+  fixy <session-id>                 Resume a specific session (e.g. fixy 4ec49f1eaa)
+  fixy -c, --continue               Resume last saved session
+  fixy -s, --sessions               List all saved sessions
   fixy -p "<prompt>"                One-shot headless run
   fixy -p "<prompt>" --json         Machine-readable JSON output
-  fixy -c                           Resume last saved session (interactive)
 
 Options:
   -p, --print <prompt>              Run a single prompt non-interactively
       --json                        Emit JSON { model, output, toolCalls }
   -c, --continue                    Restore previous conversation + memory
-  -m, --model <name>                Model override (e.g. "anthropic/claude-3.5-sonnet" or "qwen2.5-coder:7b")
+  -s, --sessions                    List all saved sessions with message counts
+  -m, --model <name>                Model override (e.g. "openrouter/free" or "qwen2.5-coder:7b")
   -P, --provider <name>             LLM provider: "ollama" or "openrouter"
       --openrouter-key <key>        Set OpenRouter API Key
       --mode <confirm|auto>         Permission mode (default: confirm interactive / auto headless)
@@ -154,14 +164,14 @@ Options:
 
 Providers:
   ollama       Local models via Ollama (default host: http://127.0.0.1:11434)
-  openrouter   Cloud models (Claude 3.7/3.5, GPT-4o, DeepSeek R1/V3, Gemini 2.0, Llama 3.3)
+  openrouter   Cloud models (100% Free models direct from OpenRouter API)
 
 Permission modes:
   confirm   Dangerous tools ask y/n before running ("a" = always this session).
             Sub-agents cannot perform write/exec actions in this mode.
   auto      AUTO-DRIVE: all tools run without prompting.
 
-Interactive commands: /help /provider /model /mode /rounds /agents /create-agent /tasks /subtasks /logs /kill /diagnostics /clear /exit
+Interactive commands: /help /provider /model /sessions /history /mode /rounds /agents /create-agent /tasks /subtasks /logs /kill /diagnostics /clear /exit
 `);
 }
 
@@ -438,6 +448,48 @@ function showSubtasksList() {
   }
 }
 
+async function showSessionsList() {
+  const sessions = await listSessions();
+  if (!sessions.length) {
+    console.log(colors.dim("\n  (No saved sessions found in ~/.fixy/sessions/)\n"));
+    return;
+  }
+  console.log("\n" + colors.secondary.bold(`✦ SAVED SESSIONS (${sessions.length} SAVED)\n`));
+  for (const s of sessions) {
+    const timeStr = s.savedAt ? s.savedAt.slice(0, 19).replace("T", " ") : "unknown";
+    const previewStr = s.preview ? `\n    ${colors.dim(`Last: "${s.preview}"`)}` : "";
+    console.log(`  ◈ ${colors.accent.bold(s.sessionId)}  ${colors.boldWhite(`(${s.messageCount} msgs)`)}  ${colors.primary(`[${s.provider}:${s.model}]`)}  ${colors.dim(timeStr)}${previewStr}`);
+  }
+  console.log(colors.dim(`\n  Resume any session: ${colors.boldWhite("fixy <session-id>")}`));
+  console.log(colors.dim(`  Resume latest session: ${colors.boldWhite("fixy -c")}\n`));
+}
+
+function showChatHistory() {
+  if (!history.length) {
+    console.log(colors.dim("\n  (No conversation history in current session)\n"));
+    return;
+  }
+  console.log("\n" + colors.secondary.bold(`✦ CONVERSATION TRANSCRIPT (${history.length} messages) [Session: ${currentSessionId || "active"}]\n`));
+  console.log(colors.dim("─".repeat(68)));
+  for (const msg of history) {
+    if (msg.role === "user") {
+      console.log(`\n${colors.accent.bold("you›")} ${msg.content}`);
+    } else if (msg.role === "assistant") {
+      if (msg.content) {
+        console.log(`\n${colors.primary.bold("✦ fixy›")} ${msg.content}`);
+      }
+      if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+        const toolNames = msg.tool_calls.map((t) => t.function?.name || t.name).join(", ");
+        console.log(colors.dim(`  [Tool calls: ${toolNames}]`));
+      }
+    } else if (msg.role === "tool") {
+      const snippet = String(msg.content || "").slice(0, 100).replace(/\n/g, " ");
+      console.log(colors.dim(`  [Tool result: ${snippet}${snippet.length >= 100 ? "…" : ""}]`));
+    }
+  }
+  console.log(colors.dim("─".repeat(68)) + "\n");
+}
+
 // --- Live Streaming Renderer ---------------------------------------------------
 
 let thinkingOpen = false;
@@ -514,19 +566,28 @@ async function restoreSessionIfRequested() {
   
   if (!session) {
     if (!HEADLESS || !cli.json) {
-      console.log(colors.warning(`No saved session found${targetId ? ` for ID ${colors.boldWhite(targetId)}` : ""}.`));
+      console.log(colors.warning(`No saved session found${targetId ? ` for ID "${colors.boldWhite(targetId)}"` : ""}. Starting new session.`));
     }
     return;
   }
 
-  history.splice(0, history.length, ...session.history);
+  history.splice(0, history.length, ...(session.history || []));
   importSessionMemory(session.memory || {});
-  currentSessionId = session.sessionId || generateSessionId();
+  currentSessionId = session.sessionId || (targetId ? targetId.replace(/\.json$/i, "") : generateSessionId());
   
+  if (session.provider) {
+    await setActiveProvider(session.provider);
+  }
+  if (session.model) {
+    setActiveModel(session.model);
+    model = session.model;
+  }
+
   if (!HEADLESS || !cli.json) {
-    console.log(colors.success(`✔ Restored session ${colors.boldWhite(currentSessionId)}`));
-    console.log(colors.dim(`  Saved at: ${session.savedAt || "unknown time"}`));
-    console.log(colors.dim(`  Messages: ${session.history.length}`));
+    console.log(colors.success(`\n✔ Restored session [${colors.boldWhite(currentSessionId)}]`));
+    console.log(colors.dim(`  Saved at: ${session.savedAt || "unknown"}`));
+    console.log(colors.dim(`  Messages: ${history.length}`));
+    if (session.model) console.log(colors.dim(`  Model: ${session.model} (${session.provider || "ollama"})`));
   }
 }
 
@@ -557,6 +618,11 @@ async function resolveStartupModel() {
     return resolved;
   }
 
+  // If restoring an existing session that already has history and model, reuse it
+  if (history.length > 0 && getActiveModel()) {
+    return getActiveModel();
+  }
+
   return pickModel();
 }
 
@@ -579,6 +645,8 @@ async function saveCurrentSession() {
     history,
     memory: exportSessionMemory(),
     sessionId: currentSessionId,
+    model,
+    provider: getActiveProvider(),
   });
 }
 
@@ -635,8 +703,18 @@ async function handleSlashCommand(trimmed) {
   if (trimmed === "/clear") {
     history.length = 0;
     clearSessionMemory();
-    await clearSession();
+    await clearSession(currentSessionId);
     console.log(colors.dim("  (Conversation history and saved session cleared)"));
+    return true;
+  }
+
+  if (trimmed === "/sessions" || trimmed === "/session-list") {
+    await showSessionsList();
+    return true;
+  }
+
+  if (trimmed === "/history" || trimmed === "/chat") {
+    showChatHistory();
     return true;
   }
 
@@ -791,6 +869,30 @@ async function runInteractive() {
   });
   console.log(colors.dim(`  Session ID: ${colors.boldWhite(currentSessionId)} (use 'fixy ${currentSessionId}' to return)`));
 
+  // If restoring conversation history, render the previous chat transcript so the user immediately sees it!
+  if (history.length > 0) {
+    console.log("\n" + colors.secondary.bold(`✦ RESTORED CONVERSATION (${history.length} messages):`));
+    console.log(colors.dim("─".repeat(68)));
+    for (const msg of history) {
+      if (msg.role === "user") {
+        console.log(`\n${colors.accent.bold("you›")} ${msg.content}`);
+      } else if (msg.role === "assistant") {
+        if (msg.content) {
+          console.log(`\n${colors.primary.bold("✦ fixy›")} ${msg.content}`);
+        }
+        if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+          const toolNames = msg.tool_calls.map((t) => t.function?.name || t.name).join(", ");
+          console.log(colors.dim(`  [Tool calls: ${toolNames}]`));
+        }
+      } else if (msg.role === "tool") {
+        const snippet = String(msg.content || "").slice(0, 100).replace(/\n/g, " ");
+        console.log(colors.dim(`  [Tool result: ${snippet}${snippet.length >= 100 ? "…" : ""}]`));
+      }
+    }
+    console.log(colors.dim("─".repeat(68)));
+    console.log(colors.success(`\n✔ Ready. Continue your prompt below:\n`));
+  }
+
   while (true) {
     const runningBgCmds = taskManager.runningCount();
     const runningBgSubagents = subagentManager.runningCount();
@@ -826,6 +928,11 @@ async function runInteractive() {
 async function main() {
   if (cli.help) {
     printHelp();
+    return;
+  }
+
+  if (cli.listSessions) {
+    await showSessionsList();
     return;
   }
 

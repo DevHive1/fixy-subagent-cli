@@ -271,6 +271,8 @@ export function renderCommandMatrix(currentRounds = 30) {
     `  ${colors.accent.bold("/help")}                     Display this command palette`,
     `  ${colors.accent.bold("/provider [name]")}          Switch provider (ollama / openrouter)`,
     `  ${colors.accent.bold("/model [name]")}             Switch or pick model`,
+    `  ${colors.accent.bold("/sessions")}                 List all saved sessions`,
+    `  ${colors.accent.bold("/history, /chat")}           Replay full conversation history`,
     `  ${colors.accent.bold("/mode [confirm|auto]")}      Set permission / safety mode`,
     `  ${colors.accent.bold("/rounds [n]")}               Set/view max tool rounds limit ${colors.dim(`(current: ${currentRounds})`)}`,
     `  ${colors.accent.bold("/clear")}                    Reset conversation context`,
