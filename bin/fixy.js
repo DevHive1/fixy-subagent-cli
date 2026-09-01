@@ -10,7 +10,6 @@ import {
   SUPPORTED_PROVIDERS,
   detectProviderForModel,
 } from "../src/llm.js";
-import { POPULAR_OPENROUTER_MODELS } from "../src/openrouter.js";
 import {
   getOpenRouterApiKey,
   setOpenRouterApiKey,

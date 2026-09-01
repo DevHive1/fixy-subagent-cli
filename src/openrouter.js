@@ -5,6 +5,9 @@ let cachedFreeModels = null;
 let lastFetchTime = 0;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
+export const POPULAR_OPENROUTER_MODELS = [];
+export const FREE_OPENROUTER_MODELS = [];
+
 /**
  * Check if an OpenRouter model object is 100% free.
  */
