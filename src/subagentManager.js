@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import EventEmitter from "node:events";
-import { chatStream, resolveAvailableModel, getActiveModel } from "./ollama.js";
+import { chatStream, resolveAvailableModel, getActiveModel } from "./llm.js";
 import { TOOL_DEFS, runTool } from "./tools.js";
 import { colors, formatAgentBadge } from "./theme.js";
 
@@ -499,14 +499,26 @@ class SubagentManager extends EventEmitter {
             if (allowedSet && !allowedSet.has(name)) {
               const deniedMsg = `ERROR: tool "${name}" is not permitted for agent "${agent.name}". Allowed tools: ${agent.allowedTools.join(", ")}`;
               appendTaskLog({ type: "tool_denied", name, agent: agent.name, taskId });
-              history.push({ role: "tool", content: deniedMsg, tool_name: name });
+              history.push({
+                role: "tool",
+                tool_call_id: call.id || `call_${Date.now()}`,
+                name,
+                tool_name: name,
+                content: deniedMsg,
+              });
               continue;
             }
 
             appendTaskLog({ type: "tool_call", name, args, agent: agent.name, taskId });
             const result = await runTool(name, args);
             appendTaskLog({ type: "tool_result", name, result, agent: agent.name, taskId });
-            history.push({ role: "tool", content: result, tool_name: name });
+            history.push({
+              role: "tool",
+              tool_call_id: call.id || `call_${Date.now()}`,
+              name,
+              tool_name: name,
+              content: result,
+            });
           }
         }
 

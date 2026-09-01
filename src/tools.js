@@ -6,7 +6,7 @@ import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { taskManager } from "./taskManager.js";
 import { subagentManager } from "./subagentManager.js";
-import { getActiveModel, resolveAvailableModel } from "./ollama.js";
+import { getActiveModel, resolveAvailableModel } from "./llm.js";
 import { setMaxRounds, getMaxRounds } from "./agent.js";
 import { requestApproval } from "./permissions.js";
 import {

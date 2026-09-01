@@ -78,7 +78,8 @@ export function renderBox(lines, options = {}) {
 /**
  * Format the main welcome banner.
  */
-export function renderBanner({ model, activeTasksCount = 0, agentCount = 7 }) {
+export function renderBanner({ model, provider = "ollama", activeTasksCount = 0, agentCount = 7 }) {
+  const providerLabel = provider === "openrouter" ? colors.secondary.bold("OpenRouter") : colors.accent.bold("Ollama");
   const modelTag = model ? colors.primary.bold(model) : colors.warning("(none)");
   const bgBadge =
     activeTasksCount > 0
@@ -90,7 +91,8 @@ export function renderBanner({ model, activeTasksCount = 0, agentCount = 7 }) {
     `  ${colors.primary.bold("◈  F I X Y")}  ${colors.dim("│")}  ${colors.highlight.bold("Engineering Subsystem v2.0")}`,
     `  ${colors.dim("Autonomous Multi-Agent Engineering & Precision Shell Engine")}`,
     ``,
-    `  ${colors.dim("Model:")} ${modelTag}   ${colors.dim("•")}   ${bgBadge}   ${colors.dim("•")}   ${agentsBadge}`,
+    `  ${colors.dim("Provider:")} ${providerLabel}   ${colors.dim("•")}   ${colors.dim("Model:")} ${modelTag}`,
+    `  ${bgBadge}   ${colors.dim("•")}   ${agentsBadge}`,
   ];
 
   console.log("\n" + renderBox(lines, { borderColor: colors.primary, minWidth: 70 }) + "\n");
@@ -99,6 +101,8 @@ export function renderBanner({ model, activeTasksCount = 0, agentCount = 7 }) {
       "  Type commands or instructions. Use " +
         colors.accent("/help") +
         " for command matrix, " +
+        colors.accent("/provider") +
+        " to switch provider, " +
         colors.accent("/create-agent") +
         " for Agent Creator.\n"
     )
@@ -265,7 +269,9 @@ export function renderCommandMatrix(currentRounds = 30) {
   const lines = [
     `${colors.primary.bold("🚀 CORE OPERATIONS")}`,
     `  ${colors.accent.bold("/help")}                     Display this command palette`,
-    `  ${colors.accent.bold("/model")}                    Switch or pick Ollama model`,
+    `  ${colors.accent.bold("/provider [name]")}          Switch provider (ollama / openrouter)`,
+    `  ${colors.accent.bold("/model [name]")}             Switch or pick model`,
+    `  ${colors.accent.bold("/mode [confirm|auto]")}      Set permission / safety mode`,
     `  ${colors.accent.bold("/rounds [n]")}               Set/view max tool rounds limit ${colors.dim(`(current: ${currentRounds})`)}`,
     `  ${colors.accent.bold("/clear")}                    Reset conversation context`,
     `  ${colors.accent.bold("/exit, /quit")}              Exit Fixy CLI`,

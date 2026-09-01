@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { chatStream } from "./ollama.js";
+import { chatStream } from "./llm.js";
 import { TOOL_DEFS, runTool } from "./tools.js";
 import { taskManager } from "./taskManager.js";
 import { subagentManager } from "./subagentManager.js";
@@ -125,7 +125,7 @@ export async function runTurn({
       });
     } catch (e) {
       if (e.name === "AbortError") {
-        return chalk.yellow(`\n⚠ LLM timeout after ${LLM_TIMEOUT_MS}ms (round ${round + 1}/${limit}). Try /rounds or check Ollama load.`);
+        return chalk.yellow(`\n⚠ LLM timeout after ${LLM_TIMEOUT_MS}ms (round ${round + 1}/${limit}). Try /rounds or check model/provider load.`);
       }
       throw e;
     } finally { clearTimeout(tId); }
@@ -151,7 +151,13 @@ export async function runTurn({
       onToolCall?.(name, args);
       const result = await runTool(name, args, { interactive: true });
       onToolResult?.(name, result);
-      history.push({ role: "tool", content: result, tool_name: name });
+      history.push({
+        role: "tool",
+        tool_call_id: call.id || `call_${Date.now()}`,
+        name,
+        tool_name: name,
+        content: result,
+      });
     }
   }
 

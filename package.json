@@ -9,7 +9,7 @@
   "main": "./bin/fixy.js",
   "scripts": {
     "start": "node ./bin/fixy.js",
-    "test": "vitest run",
+    "test": "node --test --test-concurrency=1 tests/**/*.test.js",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

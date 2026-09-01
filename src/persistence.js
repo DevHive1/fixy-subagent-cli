@@ -1,30 +1,55 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
 
 const SESSION_DIR = path.join(os.homedir(), ".fixy", "sessions");
 const LATEST = path.join(SESSION_DIR, "latest.json");
 
 /**
- * Persist conversation history + scratchpad memory to disk.
- * Called after each completed turn so `fixy -c` can resume.
- * Rotates up to 10 historic sessions and secures perms 0o700/0o600 on Termux.
+ * Generates a unique, short session ID.
  */
-export async function saveSession({ history, memory }) {
+export function generateSessionId() {
+  return crypto.randomBytes(5).toString("hex"); // e.g. '28892bhhshs' (approx)
+}
+
+/**
+ * Persist conversation history + scratchpad memory to disk.
+ * If sessionId is provided, it saves to a specific file.
+ * Always updates 'latest.json' to allow `fixy -c` to resume the most recent work.
+ */
+export async function saveSession({ history, memory, sessionId }) {
   try {
     await fs.mkdir(SESSION_DIR, { recursive: true, mode: 0o700 });
     try { await fs.chmod(SESSION_DIR, 0o700); } catch {}
-    const payload = JSON.stringify({ savedAt: new Date().toISOString(), history, memory }, null, 2);
+
+    const payload = JSON.stringify({ 
+      sessionId,
+      savedAt: new Date().toISOString(), 
+      history, 
+      memory 
+    }, null, 2);
+
+    // 1. Save to the specific session file
+    if (sessionId) {
+      const sessionPath = path.join(SESSION_DIR, `${sessionId}.json`);
+      await fs.writeFile(sessionPath, payload, { encoding: "utf8", mode: 0o600 });
+      try { await fs.chmod(sessionPath, 0o600); } catch {}
+    }
+
+    // 2. Always update 'latest.json' for quick resume
     await fs.writeFile(LATEST, payload, { encoding: "utf8", mode: 0o600 });
     try { await fs.chmod(LATEST, 0o600); } catch {}
-    // Rotate history — keep last 10 by timestamp
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const arch = path.join(SESSION_DIR, `${ts}.json`);
-    try { await fs.writeFile(arch, payload, { encoding: "utf8", mode: 0o600 }); } catch {}
-    // GC old sessions beyond 10
+
+    // 3. Rotate history — keep last 10 named sessions (excluding latest.json)
     try {
       const files = await fs.readdir(SESSION_DIR);
-      const jsons = files.filter((f) => f.endsWith(".json") && f !== "latest.json").sort();
+      const jsons = files
+        .filter((f) => f.endsWith(".json") && f !== "latest.json")
+        .sort((a, b) => {
+          // This is a naive sort, but works for most cases
+          return a.localeCompare(b);
+        });
       if (jsons.length > 10) {
         for (const f of jsons.slice(0, jsons.length - 10)) {
           try { await fs.unlink(path.join(SESSION_DIR, f)); } catch {}
@@ -37,22 +62,37 @@ export async function saveSession({ history, memory }) {
 }
 
 /**
- * Load the most recent session. Returns null when none exists.
+ * Load a session. 
+ * If sessionId is provided, loads that specific file.
+ * If sessionId is null, loads the most recent session from 'latest.json'.
  */
-export async function loadSession() {
+export async function loadSession(sessionId = null) {
   try {
-    const raw = await fs.readFile(LATEST, "utf8");
+    const filePath = sessionId 
+      ? path.join(SESSION_DIR, `${sessionId}.json`) 
+      : LATEST;
+      
+    const raw = await fs.readFile(filePath, "utf8");
     const data = JSON.parse(raw);
     if (!Array.isArray(data.history)) return null;
-    return { history: data.history, memory: data.memory || {}, savedAt: data.savedAt };
+    return { 
+      history: data.history, 
+      memory: data.memory || {}, 
+      savedAt: data.savedAt, 
+      sessionId: data.sessionId 
+    };
   } catch {
     return null;
   }
 }
 
-export async function clearSession() {
+export async function clearSession(sessionId = null) {
   try {
-    await fs.unlink(LATEST);
+    if (sessionId) {
+      await fs.unlink(path.join(SESSION_DIR, `${sessionId}.json`));
+    } else {
+      await fs.unlink(LATEST);
+    }
   } catch {
     // nothing to clear
   }

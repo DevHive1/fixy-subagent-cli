@@ -1,11 +1,15 @@
 # Fixy (Edition 2.0) — Autonomous Terminal Engineering Agent
 
-A local, on-device AI engineering assistant featuring a **cyber terminal interface**, **professional visual cards**, a specialized **Parallel Multi-Agent Subsystem** with an autonomous & interactive **Agent Creator**, a non-blocking **Background Task Engine**, configurable **Max Tool Rounds Limits**, and a comprehensive suite of **42 precision tools** and **12 specialized sub-agents**.
+An autonomous, on-device & cloud AI engineering assistant featuring a **cyber terminal interface**, **professional visual cards**, dual **Ollama & OpenRouter LLM providers**, a specialized **Parallel Multi-Agent Subsystem** with an autonomous & interactive **Agent Creator**, a non-blocking **Background Task Engine**, configurable **Max Tool Rounds Limits**, and a comprehensive suite of **42 precision tools** and **12 specialized sub-agents**.
 
 ---
 
 ## Key Highlights
 
+- **Dual LLM Providers (Ollama + OpenRouter)**:
+  - **Ollama**: Run 100% locally and offline on your machine/Termux with your installed open-weights models (no hardcoded defaults; automatically picks from your local models).
+  - **OpenRouter (100% Free Models)**: Access top cloud models with `:free` tier (`Llama 3.3 70B Instruct:free`, `DeepSeek R1:free`, `DeepSeek V3:free`, `Gemini 2.0 Flash Exp:free`, `Qwen 2.5 Coder 32B:free`, `Mistral Small 24B:free`, etc.) with zero payment required.
+  - **Seamless Switching & Key Setup**: Easily switch between Ollama and OpenRouter anytime via `/provider` or `/model`, add/update your API key with `/provider key <key>` or interactive prompts, and filter exclusively for free models.
 - **Cyber Terminal Aesthetic & Professional Cards**:
   - ⚙ **Tool Cards**: Boxed parameters table, execution duration timer `(14ms)`, status badges `[✔ SUCCESS]` / `[✖ FAILED]`, and formatted result previews.
   - ✦ **Sub-Agent Cards**: Visual profiles showing role domain, toolset permissions, max rounds, and model configuration.
@@ -108,7 +112,9 @@ A local, on-device AI engineering assistant featuring a **cyber terminal interfa
 | Command | Description |
 |---|---|
 | `/help` | Display the Command Matrix card |
-| `/model` | Switch or select local Ollama models interactively |
+| `/provider [name]` | Switch provider (`ollama` or `openrouter`) or configure OpenRouter API key |
+| `/model [name]` | Switch or select Ollama / OpenRouter models interactively |
+| `/mode [confirm\|auto]` | Set safety permission mode |
 | `/rounds [n]` | View or set max tool rounds limit for the session (e.g. `/rounds 50`) |
 | `/agents`, `/subagents` | List all core and custom sub-agents with formatted visual cards |
 | `/create-agent` | Launch interactive Agent Creator wizard |

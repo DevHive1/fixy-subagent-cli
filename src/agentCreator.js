@@ -57,7 +57,7 @@ export async function launchAgentCreator(reader) {
     }
   }
 
-  const modelOverride = await reader.question(colors.accent.bold("\n6. Model Override (leave empty to inherit main session model): "));
+  const modelOverride = await reader.question(colors.accent.bold("\n6. Model Override (e.g. 'anthropic/claude-3.5-sonnet' or 'qwen2.5-coder:7b', leave empty to inherit): "));
   const model = modelOverride?.trim() || null;
 
   const roundsInput = await reader.question(colors.accent.bold("\n7. Max Tool Rounds Limit (default: 20): "));
